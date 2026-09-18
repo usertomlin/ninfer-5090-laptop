@@ -50,7 +50,12 @@ bool supported_shape(const Q4Q5GdnInputProblem& problem) noexcept {
            // Qwen3.5-2B: 16 key/value heads of width 128 over hidden=2048 (q=k=v=2048).
            (problem.input_rows == 2048 && problem.qk_rows == 4096 &&
             problem.value_z_rows == 4096 && problem.qkv_rows == 6144 && problem.z_rows == 2048 &&
-            problem.padded_k == 2048);
+            problem.padded_k == 2048) ||
+           // Qwen3.5-0.8B: 16 key/value heads of width 128 over hidden=1024 (q=z=1024,
+           // key/value rows 2048), a single 1024-value slab.
+           (problem.input_rows == 1024 && problem.qk_rows == 4096 &&
+            problem.value_z_rows == 4096 && problem.qkv_rows == 6144 && problem.z_rows == 2048 &&
+            problem.padded_k == 1024);
 }
 
 } // namespace
@@ -98,11 +103,11 @@ Q4Q5GdnInputConvPlan q4_q5_gdn_input_conv_resolve_plan(const Q4Q5GdnInputProblem
         throw std::invalid_argument(
             "Q4/Q5 GDN input conv: exact problem or column count is not admitted");
     }
-    if (problem.input_rows == 2560 || problem.input_rows == 2048) {
-        // Qwen3.5-4B's K=2560 and Qwen3.5-2B's K=2048 own no projection-epilogue kernel: GEMV and
-        // split4 fix their reduction shapes statically and 2560 is not a whole number of 1024-value
-        // slabs. The materialized route (independent projection plane, then the registered projected
-        // convolution) covers every admitted width for these geometries.
+    if (problem.input_rows == 2560 || problem.input_rows == 2048 || problem.input_rows == 1024) {
+        // Qwen3.5-4B's K=2560, Qwen3.5-2B's K=2048, and Qwen3.5-0.8B's K=1024 own no
+        // projection-epilogue kernel, which registers only the 4096/5120 geometries. The materialized
+        // route (independent projection plane, then the registered projected convolution) covers every
+        // admitted width for these geometries.
         return {Q4Q5GdnInputConvScheduleId::Materialized};
     }
     if (batch_size > 1) { return {Q4Q5GdnInputConvScheduleId::Materialized}; }

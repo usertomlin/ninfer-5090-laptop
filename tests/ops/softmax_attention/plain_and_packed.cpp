@@ -19,18 +19,19 @@ using namespace ninfer::test;
 
 namespace {
 
-constexpr int kHeads = 16;
-
-// Vision towers differ in head width and so does their softmax temperature: 1/sqrt(72) for the 27B
-// tower and 1/sqrt(64) for the 2B/4B one.
+// Vision towers differ in head count and head width, and the head width sets the softmax
+// temperature: 1/sqrt(72) for the 27B tower and 1/sqrt(64) for the 64-wide towers. The 0.8B tower
+// packs 12 heads where the wider variants pack 16.
 struct Profile {
     int head_dim;
+    int heads;
     float scale;
 };
 
 constexpr Profile kProfiles[] = {
-    {72, 0.11785113019775792073F},
-    {64, 0.125F},
+    {72, 16, 0.11785113019775792073F},
+    {64, 16, 0.125F},
+    {64, 12, 0.125F},
 };
 
 // Both vision head widths reduce the same bf16 probability-weighted value sum and measure the same
@@ -43,7 +44,8 @@ constexpr ReductionCriterion kPackedAttentionBf16Criterion{
 };
 
 std::size_t index_of(const Profile& profile, int token, int head, int d) {
-    return (static_cast<std::size_t>(token) * kHeads + static_cast<std::size_t>(head)) *
+    return (static_cast<std::size_t>(token) * static_cast<std::size_t>(profile.heads) +
+            static_cast<std::size_t>(head)) *
                static_cast<std::size_t>(profile.head_dim) +
            static_cast<std::size_t>(d);
 }
@@ -57,7 +59,7 @@ std::vector<std::uint16_t> bf16_bits(const std::vector<float>& values) {
 void packed_attention_oracle(const Profile& profile, const std::vector<float>& q,
                              const std::vector<float>& k, const std::vector<float>& v,
                              const std::vector<int>& cu_seqlens, std::vector<double>& out) {
-    const ops::AttentionHeadGeometry geometry{profile.head_dim, kHeads, kHeads};
+    const ops::AttentionHeadGeometry geometry{profile.head_dim, profile.heads, profile.heads};
     const double scale = 1.0 / std::sqrt(static_cast<double>(profile.head_dim));
     out.assign(q.size(), 0.0);
 
@@ -117,9 +119,10 @@ const char* entry_name(PublicEntry entry) {
 int run_case(const Profile& profile, const std::vector<int>& cu_seqlens, std::uint32_t seed,
              StorageProfile storage_profile, PublicEntry entry,
              InputProfile input_profile = InputProfile::Random) {
-    const ops::AttentionHeadGeometry geometry{profile.head_dim, kHeads, kHeads};
+    const ops::AttentionHeadGeometry geometry{profile.head_dim, profile.heads, profile.heads};
     const int tokens              = cu_seqlens.back();
-    const std::size_t token_plane = static_cast<std::size_t>(kHeads) * profile.head_dim;
+    const std::size_t token_plane =
+        static_cast<std::size_t>(profile.heads) * profile.head_dim;
     const std::size_t value_count = static_cast<std::size_t>(tokens) * token_plane;
     std::vector<float> q(value_count);
     std::vector<float> k(value_count);
@@ -162,9 +165,9 @@ int run_case(const Profile& profile, const std::vector<int>& cu_seqlens, std::ui
         q_storage = to_device(q_expected);
         k_storage = to_device(k_expected);
         v_storage = to_device(v_expected);
-        q_tensor  = Tensor(q_storage.p, DType::BF16, {profile.head_dim, kHeads, tokens});
-        k_tensor  = Tensor(k_storage.p, DType::BF16, {profile.head_dim, kHeads, tokens});
-        v_tensor  = Tensor(v_storage.p, DType::BF16, {profile.head_dim, kHeads, tokens});
+        q_tensor  = Tensor(q_storage.p, DType::BF16, {profile.head_dim, profile.heads, tokens});
+        k_tensor  = Tensor(k_storage.p, DType::BF16, {profile.head_dim, profile.heads, tokens});
+        v_tensor  = Tensor(v_storage.p, DType::BF16, {profile.head_dim, profile.heads, tokens});
     } else {
         interleaved_expected.resize(value_count * 3);
         for (int token = 0; token < tokens; ++token) {
@@ -179,7 +182,7 @@ int run_case(const Profile& profile, const std::vector<int>& cu_seqlens, std::ui
         }
         interleaved_storage = to_device(interleaved_expected);
         q_tensor            = Tensor(interleaved_storage.p, DType::BF16,
-                                     {profile.head_dim, kHeads, tokens});
+                                     {profile.head_dim, profile.heads, tokens});
         q_tensor.nb[2]      = static_cast<std::int64_t>(token_plane * 3 * sizeof(std::uint16_t));
         k_tensor            = q_tensor;
         v_tensor            = q_tensor;
@@ -193,7 +196,7 @@ int run_case(const Profile& profile, const std::vector<int>& cu_seqlens, std::ui
     Tensor cu_tensor(d_cu_seqlens.p, DType::I32, {static_cast<std::int32_t>(cu_seqlens.size())});
     GuardedDeviceBuffer d_out(value_count * sizeof(std::uint16_t));
     d_out.fill(0x7f);
-    Tensor out_tensor(d_out.data(), DType::BF16, {profile.head_dim, kHeads, tokens});
+    Tensor out_tensor(d_out.data(), DType::BF16, {profile.head_dim, profile.heads, tokens});
 
     const std::int32_t segments       = static_cast<std::int32_t>(cu_seqlens.size()) - 1;
     const std::size_t workspace_bytes = ops::packed_softmax_attention_workspace_capacity_bytes(
@@ -264,8 +267,20 @@ int run_softmax_attention_plain_and_packed_tests() {
     }
 
     int failures = 0;
+    // Only the instantiated tower geometries are admissible: 64-wide with 12 or 16 heads and 72-wide
+    // with 16. Uninstantiated head counts and widths, and GQA-style head mismatches, are rejected by
+    // the geometry contract before any launch.
+    const ops::AttentionHeadGeometry unsupported[] = {
+        {64, 8, 8}, {64, 32, 32}, {80, 16, 16}, {72, 12, 12}, {64, 16, 8}};
+    for (const ops::AttentionHeadGeometry& rejected : unsupported) {
+        try {
+            (void)ops::packed_softmax_attention_workspace_capacity_bytes(rejected, 4, 194, 1, 1);
+            std::cerr << "packed_softmax_attention accepted an uninstantiated head geometry\n";
+            ++failures;
+        } catch (const std::invalid_argument&) {}
+    }
     for (const Profile& profile : kProfiles) {
-        const ops::AttentionHeadGeometry geometry{profile.head_dim, kHeads, kHeads};
+        const ops::AttentionHeadGeometry geometry{profile.head_dim, profile.heads, profile.heads};
         if (ops::packed_softmax_attention_workspace_capacity_bytes(geometry, 4, 194, 1, 1) != 0 ||
             ops::packed_softmax_attention_workspace_capacity_bytes(geometry, 4, 194, 1, 3) !=
                 ops::packed_softmax_attention_workspace_capacity_bytes(geometry, 194, 194, 3, 3)) {

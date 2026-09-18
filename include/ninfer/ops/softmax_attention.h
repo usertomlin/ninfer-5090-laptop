@@ -62,18 +62,19 @@ struct ContextAttentionExecutionEnvelope {
 /**
  * Dense, non-causal single-segment attention.
  *
- * The registered profile is D=72, Hq=Hkv=16, scale=1/sqrt(72). q/k/v are BF16 [72,16,T]
- * with contiguous feature and head dimensions; their token stride may be padded. out is contiguous
- * BF16 [72,16,T]. Every query attends all T keys. q/k/v/out are mutually non-overlapping, inputs
- * are unchanged, out is completely overwritten, and the Op has no persistent state side effect.
- * The single segment needs no transient workspace.
+ * The registered geometries are (D,Hq,Hkv)=(64,12,12) for the 0.8B vision tower, (64,16,16) for
+ * the wider 64-wide towers, and (72,16,16) for the 27B one, each with scale=1/sqrt(D). q/k/v are
+ * BF16 [D,H,T] with contiguous feature and head dimensions; their token stride may be padded. out
+ * is contiguous BF16 [D,H,T]. Every query attends all T keys. q/k/v/out are mutually
+ * non-overlapping, inputs are unchanged, out is completely overwritten, and the Op has no persistent
+ * state side effect. The single segment needs no transient workspace.
  */
 void softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
                        AttentionHeadGeometry geometry, float scale, WorkspaceArena& workspace,
                        Tensor& out, cudaStream_t stream);
 
 /**
- * Packed block-diagonal dense attention for the same D72/H16 profile.
+ * Packed block-diagonal dense attention for the same registered geometries.
  *
  * cu_seqlens is contiguous device I32 [S+1], starts at 0, ends at T, and is strictly increasing.
  * Each range [cu_seqlens[s],cu_seqlens[s+1]) is an independent non-causal segment; no score crosses

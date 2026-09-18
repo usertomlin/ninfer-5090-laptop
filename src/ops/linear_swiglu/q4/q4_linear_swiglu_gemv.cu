@@ -87,10 +87,11 @@ constexpr auto kSmallTLaunchers27 = make_small_t_launchers<17408, 5120>(std::mak
 constexpr auto kSmallTLaunchers9  = make_small_t_launchers<12288, 4096>(std::make_index_sequence<31>{});
 constexpr auto kSmallTLaunchers4  = make_small_t_launchers<9216, 2560>(std::make_index_sequence<31>{});
 constexpr auto kSmallTLaunchers2  = make_small_t_launchers<6144, 2048>(std::make_index_sequence<31>{});
+constexpr auto kSmallTLaunchers08 = make_small_t_launchers<3584, 1024>(std::make_index_sequence<31>{});
 
 // One warp tile covers kTileGroups 64-wide groups: 16 (32 code vectors and 2 scale vectors per
-// lane set) for the 5120/4096-wide rows, 8 (16 code vectors, 1 scale vector) for the 4B's
-// 2560-wide rows whose 40 groups do not divide into 16.
+// lane set) for the geometries whose K is a multiple of 1024, 8 (16 code vectors, 1 scale vector)
+// for the 4B's 2560-wide rows whose 40 groups do not divide into 16.
 template <int kTileGroups>
 __device__ __forceinline__ void q4_issue_pair_tile(uint4 (*__restrict__ s_code)[kTileGroups * 2],
                                                    uint4 (*__restrict__ s_scale)[2],
@@ -255,6 +256,12 @@ void q4_linear_swiglu_gemv_pair_launch(const Tensor& x, const Weight& w, Tensor&
         }
         launch_gemv<12288, 2048>(x, w, out, stream);
         return;
+    case 7168:
+        if (w.k != 1024 || w.padded_shape[1] != 1024) {
+            throw std::invalid_argument("q4 linear_swiglu GEMV requires weight [7168,1024]");
+        }
+        launch_gemv<7168, 1024>(x, w, out, stream);
+        return;
     default:
         throw std::invalid_argument("q4 linear_swiglu GEMV: unsupported weight shape");
     }
@@ -280,6 +287,10 @@ void q4_linear_swiglu_small_t_tiled_launch(const Tensor& x, const Weight& w, Ten
     }
     if (w.n == 12288) {
         kSmallTLaunchers2[idx](x, w, out, stream);
+        return;
+    }
+    if (w.n == 7168) {
+        kSmallTLaunchers08[idx](x, w, out, stream);
         return;
     }
     throw std::invalid_argument("q4 linear_swiglu small_t: unsupported weight shape");

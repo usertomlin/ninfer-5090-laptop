@@ -33,6 +33,7 @@ constexpr Q4LinearSwiGluProblem kShape27{34816, 17408, 5120, 5120, 1};
 constexpr Q4LinearSwiGluProblem kShape9{24576, 12288, 4096, 4096, 1};
 constexpr Q4LinearSwiGluProblem kShape4{18432, 9216, 2560, 2560, 1};
 constexpr Q4LinearSwiGluProblem kShape2{12288, 6144, 2048, 2048, 1};
+constexpr Q4LinearSwiGluProblem kShape08{7168, 3584, 1024, 1024, 1};
 
 constexpr std::array<RouteSpec, 10> kRoutesWide{{
     {{1, 1}, Q4LinearSwiGluScheduleId::GemvPair},
@@ -47,10 +48,10 @@ constexpr std::array<RouteSpec, 10> kRoutesWide{{
     {{641, kAnyCols}, Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C128},
 }};
 
-// The 4B's K=2560 and the 2B's K=2048 reductions own no plain Q4 linear route that could
-// materialize a gate_up projection. Every column count the wide catalog assigns to a materialized
-// gate_up instead runs the geometry-generic folded pair kernel, whose partial-tile path covers
-// those extents.
+// The 4B's K=2560, the 2B's K=2048, and the 0.8B's K=1024 reductions own no plain Q4 linear route
+// that could materialize a gate_up projection. Every column count the wide catalog assigns to a
+// materialized gate_up instead runs the geometry-generic folded pair kernel, whose partial-tile
+// path covers those extents.
 constexpr std::array<RouteSpec, 5> kRoutesNarrow{{
     {{1, 1}, Q4LinearSwiGluScheduleId::GemvPair},
     {{2, 32}, Q4LinearSwiGluScheduleId::SmallTTiled},
@@ -85,9 +86,15 @@ constexpr bool is_geometry2(const Q4LinearSwiGluProblem& problem) noexcept {
            problem.padded_k == kShape2.padded_k;
 }
 
+constexpr bool is_geometry08(const Q4LinearSwiGluProblem& problem) noexcept {
+    return problem.gate_up_rows == kShape08.gate_up_rows &&
+           problem.output_rows == kShape08.output_rows && problem.k == kShape08.k &&
+           problem.padded_k == kShape08.padded_k;
+}
+
 // Narrow-K geometries whose reduction has no materializable plain Q4 linear route.
 constexpr bool uses_folded_pairs_only(const Q4LinearSwiGluProblem& problem) noexcept {
-    return is_geometry2(problem) || is_geometry4(problem);
+    return is_geometry2(problem) || is_geometry4(problem) || is_geometry08(problem);
 }
 
 bool supported_shape(const Q4LinearSwiGluProblem& problem) noexcept {

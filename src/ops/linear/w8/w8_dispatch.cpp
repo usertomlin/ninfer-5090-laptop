@@ -177,6 +177,48 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_w8_mma_r64_c128;
         }
         break;
+    case 3584:
+        if (n == 1024) {
+            // 0.8B MTP MLP down projection W8 [1024,3584].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        }
+        break;
+    case 3072:
+        switch (n) {
+        case 3072:
+            // 0.8B vision merger fc1 W8 [3072,3072].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        case 1024:
+            // 0.8B vision merger fc2 W8 [1024,3072].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        default:
+            break;
+        }
+        break;
+    case 1024:
+        // 0.8B MTP W8 projections sharing the 1024-wide input: the packed query/key/gate/value
+        // [5120,1024], its query and output-gate row views [2048,1024], its key/value row views
+        // [512,1024] and the MLP gate-up [7168,1024].
+        switch (n) {
+        case 512:
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
+        case 2048:
+        case 5120:
+        case 7168:
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        default:
+            break;
+        }
+        break;
     case 4608:
         if (t > 32768) { break; }
         switch (n) {

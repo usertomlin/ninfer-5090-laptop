@@ -15,7 +15,10 @@ bool supported_shape(const Q4Q5AttnInputProblem& problem) noexcept {
             problem.kv_rows == 1024 && problem.padded_k == 2560) ||
            // Qwen3.5-2B: 8 query heads and 2 KV heads of width 256 over hidden=2048.
            (problem.input_rows == 2048 && problem.query_rows == 2048 && problem.kv_rows == 512 &&
-            problem.padded_k == 2048);
+            problem.padded_k == 2048) ||
+           // Qwen3.5-0.8B: 8 query heads and 2 KV heads of width 256 over hidden=1024.
+           (problem.input_rows == 1024 && problem.query_rows == 2048 && problem.kv_rows == 512 &&
+            problem.padded_k == 1024);
 }
 
 } // namespace

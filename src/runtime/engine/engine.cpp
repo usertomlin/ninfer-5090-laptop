@@ -218,17 +218,20 @@ class Engine::Impl {
 public:
     using Core4       = runtime::EngineCore<targets::Qwen3_5_4BInstance>;
     using Core2       = runtime::EngineCore<targets::Qwen3_5_2BInstance>;
+    using Core08      = runtime::EngineCore<targets::Qwen3_5_0_8BInstance>;
     using Core9       = runtime::EngineCore<targets::Qwen3_5_9BInstance>;
     using Core27      = runtime::EngineCore<targets::Qwen3_6_27BInstance>;
     using Core35      = runtime::EngineCore<targets::Qwen3_6_35BA3BInstance>;
     using ScoreCore4  = runtime::CausalScoreCore<targets::Qwen3_5_4BInstance>;
     using ScoreCore2  = runtime::CausalScoreCore<targets::Qwen3_5_2BInstance>;
+    using ScoreCore08 = runtime::CausalScoreCore<targets::Qwen3_5_0_8BInstance>;
     using ScoreCore27 = runtime::CausalScoreCore<targets::Qwen3_6_27BInstance>;
     using ScoreCore35 = runtime::CausalScoreCore<targets::Qwen3_6_35BA3BInstance>;
     using Core = std::variant<std::monostate, std::unique_ptr<Core4>, std::unique_ptr<Core2>,
-                              std::unique_ptr<Core9>, std::unique_ptr<Core27>,
-                              std::unique_ptr<Core35>, std::unique_ptr<ScoreCore4>,
-                              std::unique_ptr<ScoreCore2>, std::unique_ptr<ScoreCore27>,
+                              std::unique_ptr<Core08>, std::unique_ptr<Core9>,
+                              std::unique_ptr<Core27>, std::unique_ptr<Core35>,
+                              std::unique_ptr<ScoreCore4>, std::unique_ptr<ScoreCore2>,
+                              std::unique_ptr<ScoreCore08>, std::unique_ptr<ScoreCore27>,
                               std::unique_ptr<ScoreCore35>>;
 
     explicit Impl(EngineOptions engine_options)
@@ -256,6 +259,12 @@ public:
                     }
                     return std::make_unique<Core2>(*target_ptr, device, options,
                                                    std::move(constructed.context_cost));
+                } else if constexpr (std::is_same_v<Instance, targets::Qwen3_5_0_8BInstance>) {
+                    if (options.purpose == EnginePurpose::CausalScoring) {
+                        return std::make_unique<ScoreCore08>(*target_ptr, device);
+                    }
+                    return std::make_unique<Core08>(*target_ptr, device, options,
+                                                    std::move(constructed.context_cost));
                 } else if constexpr (std::is_same_v<Instance, targets::Qwen3_5_9BInstance>) {
                     return std::make_unique<Core9>(*target_ptr, device, options,
                                                    std::move(constructed.context_cost));
@@ -475,6 +484,7 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
                 throw std::logic_error("Engine core is unavailable");
             } else if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore4>> ||
                                  std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore2>> ||
+                                 std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore08>> ||
                                  std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore27>> ||
                                  std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore35>>) {
                 throw std::logic_error("Engine generation core is unavailable");

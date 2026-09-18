@@ -70,6 +70,17 @@ constexpr std::array<RouteSpec, 5> k2Routes{{
     {{8193, kAnyCols}, Bf16GdnGatingScheduleId::MmaUnsplit},
 }};
 
+constexpr std::array<RouteSpec, 5> k08Routes{{
+    // 0.8B shares the single 16-row token tile and BN64 cooperative residency profile of the 2B
+    // routes, so it reuses their column endpoints; its 16 K tiles still divide split16/8/4/2
+    // exactly. The launcher independently enforces actual-device residency.
+    {{1, 255}, Bf16GdnGatingScheduleId::MmaCooperativeSplit16},
+    {{256, 2048}, Bf16GdnGatingScheduleId::MmaCooperativeSplit8},
+    {{2049, 4096}, Bf16GdnGatingScheduleId::MmaCooperativeSplit4},
+    {{4097, 8192}, Bf16GdnGatingScheduleId::MmaCooperativeSplit2},
+    {{8193, kAnyCols}, Bf16GdnGatingScheduleId::MmaUnsplit},
+}};
+
 template <std::size_t N>
 constexpr bool catalog_is_closed(const std::array<RouteSpec, N>& routes,
                                  std::int32_t last) noexcept {
@@ -85,6 +96,7 @@ static_assert(catalog_is_closed(k27Routes, kAnyCols));
 static_assert(catalog_is_closed(k35Routes, kAnyCols));
 static_assert(catalog_is_closed(k4Routes, kAnyCols));
 static_assert(catalog_is_closed(k2Routes, kAnyCols));
+static_assert(catalog_is_closed(k08Routes, kAnyCols));
 
 bool is_27(const Bf16GdnGatingProblem& problem) noexcept {
     return problem.heads == 48 && problem.input_rows == 5120;
@@ -106,6 +118,10 @@ bool is_2(const Bf16GdnGatingProblem& problem) noexcept {
     return problem.heads == 16 && problem.input_rows == 2048;
 }
 
+bool is_08(const Bf16GdnGatingProblem& problem) noexcept {
+    return problem.heads == 16 && problem.input_rows == 1024;
+}
+
 bool schedule_uses_mma(Bf16GdnGatingScheduleId schedule) noexcept {
     switch (schedule) {
     case Bf16GdnGatingScheduleId::MmaCooperativeSplit32:
@@ -125,7 +141,9 @@ bool schedule_uses_mma(Bf16GdnGatingScheduleId schedule) noexcept {
 }
 
 std::int32_t mma_tile_cols(const Bf16GdnGatingProblem& problem) noexcept {
-    return (is_35(problem) || is_9(problem) || is_4(problem) || is_2(problem)) ? 64 : 128;
+    return (is_35(problem) || is_9(problem) || is_4(problem) || is_2(problem) || is_08(problem))
+               ? 64
+               : 128;
 }
 
 std::int32_t schedule_split_k(Bf16GdnGatingScheduleId schedule) {
@@ -322,6 +340,27 @@ bool candidate_is_legal(Bf16GdnGatingScheduleId schedule,
         }
     }
 
+    if (is_08(problem)) {
+        // The 0.8B profile shares the 2B single-16-row-tile/BN64 cooperative residency profile
+        // but has only 16 K tiles, so split16/8/4/2 still divide its K exactly while split-32 and
+        // the 27B small-T/GEMV lanes are unavailable.
+        switch (schedule) {
+        case Bf16GdnGatingScheduleId::MmaCooperativeSplit16:
+        case Bf16GdnGatingScheduleId::MmaCooperativeSplit8:
+        case Bf16GdnGatingScheduleId::MmaCooperativeSplit4:
+        case Bf16GdnGatingScheduleId::MmaCooperativeSplit2:
+            return cooperative_2_grid_is_resident(schedule, problem.cols);
+        case Bf16GdnGatingScheduleId::MmaUnsplit:
+            return true;
+        case Bf16GdnGatingScheduleId::GemvPairedRows:
+        case Bf16GdnGatingScheduleId::SmallTSplit10:
+        case Bf16GdnGatingScheduleId::SimtWarpRowC4:
+        case Bf16GdnGatingScheduleId::SimtWarpRowC8:
+        case Bf16GdnGatingScheduleId::MmaCooperativeSplit32:
+            return false;
+        }
+    }
+
     switch (schedule) {
     case Bf16GdnGatingScheduleId::SimtWarpRowC4:
         return problem.cols <= 4 * 65'535;
@@ -377,6 +416,9 @@ void execute_resolved(const Bf16GdnGatingPlan& plan, const Bf16GdnGatingProblem&
         } else if (is_2(problem)) {
             bf16_gdn_gating_proj_2_mma_unsplit_launch(plan.token_variant, x, a_weight, b_weight,
                                                       A_log, dt_bias, g, beta, execution.stream);
+        } else if (is_08(problem)) {
+            bf16_gdn_gating_proj_08_mma_unsplit_launch(plan.token_variant, x, a_weight, b_weight,
+                                                       A_log, dt_bias, g, beta, execution.stream);
         } else {
             bf16_gdn_gating_proj_mma_unsplit_launch(plan.token_variant, x, a_weight, b_weight,
                                                     A_log, dt_bias, g, beta, execution.stream);
@@ -418,6 +460,10 @@ void execute_resolved(const Bf16GdnGatingPlan& plan, const Bf16GdnGatingProblem&
             finish_cooperative(bf16_gdn_gating_proj_2_mma_split16_launch(
                 plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
                 execution.multiprocessor_count, execution.stream));
+        } else if (is_08(problem)) {
+            finish_cooperative(bf16_gdn_gating_proj_08_mma_split16_launch(
+                plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
+                execution.multiprocessor_count, execution.stream));
         } else {
             finish_cooperative(bf16_gdn_gating_proj_35_mma_split16_launch(
                 plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
@@ -439,6 +485,10 @@ void execute_resolved(const Bf16GdnGatingPlan& plan, const Bf16GdnGatingProblem&
                 execution.multiprocessor_count, execution.stream));
         } else if (is_2(problem)) {
             finish_cooperative(bf16_gdn_gating_proj_2_mma_split8_launch(
+                plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
+                execution.multiprocessor_count, execution.stream));
+        } else if (is_08(problem)) {
+            finish_cooperative(bf16_gdn_gating_proj_08_mma_split8_launch(
                 plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
                 execution.multiprocessor_count, execution.stream));
         } else {
@@ -464,6 +514,10 @@ void execute_resolved(const Bf16GdnGatingPlan& plan, const Bf16GdnGatingProblem&
             finish_cooperative(bf16_gdn_gating_proj_2_mma_split4_launch(
                 plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
                 execution.multiprocessor_count, execution.stream));
+        } else if (is_08(problem)) {
+            finish_cooperative(bf16_gdn_gating_proj_08_mma_split4_launch(
+                plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
+                execution.multiprocessor_count, execution.stream));
         } else {
             finish_cooperative(bf16_gdn_gating_proj_mma_split4_launch(
                 plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
@@ -485,6 +539,10 @@ void execute_resolved(const Bf16GdnGatingPlan& plan, const Bf16GdnGatingProblem&
                 execution.multiprocessor_count, execution.stream));
         } else if (is_2(problem)) {
             finish_cooperative(bf16_gdn_gating_proj_2_mma_split2_launch(
+                plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
+                execution.multiprocessor_count, execution.stream));
+        } else if (is_08(problem)) {
+            finish_cooperative(bf16_gdn_gating_proj_08_mma_split2_launch(
                 plan.token_variant, x, a_weight, b_weight, A_log, dt_bias, scratch.data, g, beta,
                 execution.multiprocessor_count, execution.stream));
         } else {
@@ -556,7 +614,8 @@ const char* bf16_gdn_norm_gating_schedule_name(Bf16GdnNormGatingScheduleId sched
 
 bool bf16_gdn_gating_admits(const Bf16GdnGatingProblem& problem) noexcept {
     if (problem.cols < 1) { return false; }
-    return is_27(problem) || is_35(problem) || is_9(problem) || is_4(problem) || is_2(problem);
+    return is_27(problem) || is_35(problem) || is_9(problem) || is_4(problem) || is_2(problem) ||
+           is_08(problem);
 }
 
 Bf16GdnGatingPlan bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId schedule,
@@ -620,6 +679,13 @@ Bf16GdnGatingPlan bf16_gdn_gating_resolve_plan(const Bf16GdnGatingProblem& probl
                 break;
             }
         }
+    } else if (is_08(problem)) {
+        for (const RouteSpec& route : k08Routes) {
+            if (route.cols.contains(problem.cols)) {
+                preferred = route.schedule;
+                break;
+            }
+        }
     } else {
         for (const RouteSpec& route : k35Routes) {
             if (route.cols.contains(problem.cols)) {
@@ -666,6 +732,7 @@ std::size_t bf16_gdn_gating_capacity_workspace_bytes(std::int32_t heads, std::in
     if (is_27(base)) { return route_capacity(k27Routes, base, min_cols, max_cols); }
     if (is_4(base)) { return route_capacity(k4Routes, base, min_cols, max_cols); }
     if (is_2(base)) { return route_capacity(k2Routes, base, min_cols, max_cols); }
+    if (is_08(base)) { return route_capacity(k08Routes, base, min_cols, max_cols); }
     return route_capacity(k35Routes, base, min_cols, max_cols);
 }
 

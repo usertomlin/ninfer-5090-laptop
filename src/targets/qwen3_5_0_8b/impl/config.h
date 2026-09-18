@@ -1,0 +1,114 @@
+#pragma once
+
+#include <ninfer/targets/qwen3_6/frontend.h>
+#include <ninfer/targets/qwen3_6/hybrid_topology.h>
+#include <ninfer/targets/qwen3_6/vision.h>
+
+#include <cstdint>
+
+namespace ninfer::targets::qwen3_5_0_8b::detail {
+
+struct TextConfig {
+    static constexpr int hidden       = 1024;
+    static constexpr int layers       = 24;
+    static constexpr int intermediate = 3584;
+
+    static constexpr int output_rows  = 248320;
+    static constexpr int token_domain = static_cast<int>(qwen3_6::kTokenDomain);
+
+    static constexpr int gdn_conv_kernel      = 4;
+    static constexpr int gdn_conv_state_width = gdn_conv_kernel - 1;
+    static constexpr int gdn_key_heads        = 16;
+    static constexpr int gdn_key_head_dim     = 128;
+    static constexpr int gdn_value_heads      = 16;
+    static constexpr int gdn_value_head_dim   = 128;
+
+    static constexpr int query_heads = 8;
+    static constexpr int kv_heads    = 2;
+    static constexpr int head_dim    = 256;
+    static constexpr int rotary_dim  = 64;
+
+    static constexpr int full_attention_interval = qwen3_6::kHybridAttentionInterval;
+    static constexpr float rms_epsilon           = 1.0e-6F;
+    static constexpr float rope_theta            = 1.0e7F;
+
+    static constexpr int key_dim               = gdn_key_heads * gdn_key_head_dim;
+    static constexpr int value_dim             = gdn_value_heads * gdn_value_head_dim;
+    static constexpr int convolution_dim       = 2 * key_dim + value_dim;
+    static constexpr int query_size            = query_heads * head_dim;
+    static constexpr int kv_size               = kv_heads * head_dim;
+    static constexpr int query_projection_rows = 2 * query_size;
+
+    static constexpr int mtp_layers               = 1;
+    static constexpr int mtp_input_rows           = 2 * hidden;
+    static constexpr int mtp_attention_input_rows = 2 * query_size + 2 * kv_size;
+    static constexpr int mtp_mlp_gate_up_rows     = 2 * intermediate;
+
+    [[nodiscard]] static constexpr bool is_full_attention(int layer) {
+        return qwen3_6::is_full_attention_layer(layer);
+    }
+
+    [[nodiscard]] static constexpr int full_attention_layers() {
+        return qwen3_6::full_attention_layers(layers);
+    }
+
+    [[nodiscard]] static constexpr int gdn_layers() { return qwen3_6::gdn_layers(layers); }
+
+    [[nodiscard]] static constexpr int full_attention_index(int layer) {
+        return qwen3_6::full_attention_index(layer);
+    }
+
+    [[nodiscard]] static constexpr int gdn_index(int layer) { return qwen3_6::gdn_index(layer); }
+};
+
+static_assert(TextConfig::full_attention_layers() == 6);
+static_assert(TextConfig::gdn_layers() == 18);
+
+// The 0.8B vision tower is narrower than the family reference: 12 layers, width 768, an MLP
+// width of 3072, and 64-wide attention heads (attention scale 1/sqrt(64)).  Unlike the wider
+// variants it also has 12 attention heads, so ``heads`` must be narrowed here for the derived
+// ``head_dim`` to remain 64.
+struct VisionConfig : qwen3_6::VisionBackboneConfig {
+    static constexpr int layers        = 12;
+    static constexpr int hidden        = 768;
+    static constexpr int intermediate  = 3072;
+    static constexpr int heads         = 12;
+    static constexpr int output_hidden = TextConfig::hidden;
+    // Derived constants must be redefined: the inherited base versions were evaluated against the
+    // base hidden/heads, and hidden shadowing alone does not re-derive them.
+    static constexpr int head_dim          = hidden / heads;
+    static constexpr int merger_hidden     = hidden * merge_unit;
+    static constexpr int rotary_dim        = head_dim;
+    static constexpr float attention_scale = 0.125F;
+};
+
+static_assert(VisionConfig::head_dim == 64);
+static_assert(VisionConfig::merger_hidden == 3072);
+static_assert(VisionConfig::rotary_dim == 64);
+
+struct DFlashConfig {
+    static constexpr bool supported             = false;
+    static constexpr SpeculativeBackend backend = SpeculativeBackend::None;
+    static constexpr bool coherent_selector     = false;
+    static constexpr int local_layers           = 0;
+    static constexpr int full_layers            = 0;
+    static constexpr int local_capacity         = 0;
+    static constexpr int kv_heads               = 0;
+    static constexpr int head_dim               = 0;
+    static constexpr int feature_layers         = 0;
+    static constexpr int feature_rows           = 0;
+    static constexpr int hidden                 = 0;
+    static constexpr int intermediate           = 0;
+    static constexpr int query_heads            = 0;
+    static constexpr int query_size             = 0;
+    static constexpr int kv_size                = 0;
+};
+
+inline constexpr float kAttentionScale                   = 0.0625F;
+inline constexpr float kGdnScale                         = 0.08838834764831845F;
+inline constexpr std::uint32_t kPrefillChunkAlignment    = 128;
+inline constexpr std::uint32_t kMaximumMtpDraftTokens    = 5;
+inline constexpr std::uint32_t kMaximumDFlashDraftTokens = 0;
+inline constexpr std::uint32_t kNativeContext            = 262144;
+
+} // namespace ninfer::targets::qwen3_5_0_8b::detail

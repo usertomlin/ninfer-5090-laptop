@@ -351,6 +351,9 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& qkv, 
 detail::Q4Q5GdnInputConvPlan resolve_q4_q5_conv_plan(std::int32_t hidden, std::int32_t tokens,
                                                      std::int32_t batch_size) {
     switch (hidden) {
+    case 1024:
+        return detail::q4_q5_gdn_input_conv_resolve_plan(
+            {1024, 4096, 4096, 6144, 2048, 1024, tokens}, batch_size);
     case 2048:
         return detail::q4_q5_gdn_input_conv_resolve_plan(
             {2048, 4096, 4096, 6144, 2048, 2048, tokens}, batch_size);
@@ -751,15 +754,17 @@ void gdn_input_proj(const Tensor& x, const Weight& qk_weight, const Weight& valu
                          "value/z weight");
         break;
     }
-    case 2048: {
+    case 2048:
+    case 1024: {
+        const std::int32_t hidden        = x.ne[0];
         constexpr std::int32_t kQkRows    = 4096;
         constexpr std::int32_t kValueRows = 2048;
         constexpr std::int32_t kZRows     = 2048;
-        require_matrix(x, 2048, cols, "x");
+        require_matrix(x, hidden, cols, "x");
         require_matrix(qkv, kQkRows + kValueRows, cols, "qkv");
         require_matrix(z, kZRows, cols, "z");
-        require_rowsplit(qk_weight, QType::Q4G64_F16S, kQkRows, 2048, "qk weight");
-        require_rowsplit(value_z_weight, QType::Q5G64_F16S, kValueRows + kZRows, 2048,
+        require_rowsplit(qk_weight, QType::Q4G64_F16S, kQkRows, hidden, "qk weight");
+        require_rowsplit(value_z_weight, QType::Q5G64_F16S, kValueRows + kZRows, hidden,
                          "value/z weight");
         break;
     }
@@ -836,7 +841,7 @@ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
     std::int32_t max_width) {
     const bool q4_q5 = (input_rows == 5120 && value_rows == 6144) ||
                        ((input_rows == 4096 || input_rows == 2560) && value_rows == 4096) ||
-                       (input_rows == 2048 && value_rows == 2048);
+                       ((input_rows == 2048 || input_rows == 1024) && value_rows == 2048);
     const bool w8 = input_rows == 2048 && value_rows == 4096;
     if (query_rows != 2048 || key_rows != 2048 || (!q4_q5 && !w8)) {
         throw std::invalid_argument("gdn_input_proj_conv_snapshot workspace: unregistered shape");
@@ -858,9 +863,9 @@ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
     if (q4_q5) {
         (void)resolve_q4_q5_conv_plan(input_rows, min_width, 1);
         (void)resolve_q4_q5_conv_plan(input_rows, max_width, 1);
-        if (input_rows == 2560 || input_rows == 2048) {
-            // The K=2560 and K=2048 geometries own no projection-epilogue kernel, so every width of
-            // them is materialized.
+        if (input_rows == 2560 || input_rows == 2048 || input_rows == 1024) {
+            // The K=2560, K=2048, and K=1024 geometries own no projection-epilogue kernel, so
+            // every width of them is materialized.
             largest_materialized_width = max_width;
         } else if (max_width >= 7) {
             largest_materialized_width = max_width;
@@ -915,7 +920,7 @@ std::size_t gdn_input_proj_conv_record_workspace_capacity_bytes(
     std::int32_t max_width) {
     const bool q4_q5 = (input_rows == 5120 && value_rows == 6144) ||
                        ((input_rows == 4096 || input_rows == 2560) && value_rows == 4096) ||
-                       (input_rows == 2048 && value_rows == 2048);
+                       ((input_rows == 2048 || input_rows == 1024) && value_rows == 2048);
     const bool w8 = input_rows == 2048 && value_rows == 4096;
     if (query_rows != 2048 || key_rows != 2048 || (!q4_q5 && !w8)) {
         throw std::invalid_argument("gdn_input_proj_conv_record workspace: unregistered shape");
@@ -973,13 +978,14 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& qk_weight,
                                   Tensor& value, Tensor& z, WorkspaceArena& ws,
                                   cudaStream_t stream) {
     const std::int32_t hidden = x.ne[0];
-    if (hidden != 2048 && hidden != 2560 && hidden != 4096 && hidden != 5120) {
+    if (hidden != 1024 && hidden != 2048 && hidden != 2560 && hidden != 4096 && hidden != 5120) {
         throw std::invalid_argument("gdn_input_proj_conv_snapshot: unsupported input width");
     }
+    const bool small_hidden        = hidden == 1024 || hidden == 2048;
     const std::int32_t kQueryRows  = 2048;
     const std::int32_t kKeyRows    = 2048;
-    const std::int32_t kValueRows  = hidden == 5120 ? 6144 : (hidden == 2048 ? 2048 : 4096);
-    const std::int32_t kZRows      = hidden == 5120 ? 6144 : (hidden == 2048 ? 2048 : 4096);
+    const std::int32_t kValueRows  = hidden == 5120 ? 6144 : (small_hidden ? 2048 : 4096);
+    const std::int32_t kZRows      = hidden == 5120 ? 6144 : (small_hidden ? 2048 : 4096);
     const std::int32_t kChannels   = kQueryRows + kKeyRows + kValueRows;
     const std::int32_t kParentRows = kValueRows + kZRows;
     const ConvGeometry geometry    = require_snapshot_input(x, hidden);
@@ -1032,13 +1038,14 @@ void gdn_input_proj_conv_record(const Tensor& x, const Weight& qk_weight,
                                 Tensor& query, Tensor& key, Tensor& value, Tensor& z,
                                 WorkspaceArena& workspace, cudaStream_t stream) {
     const std::int32_t hidden = x.ne[0];
-    if (hidden != 2048 && hidden != 2560 && hidden != 4096 && hidden != 5120) {
+    if (hidden != 1024 && hidden != 2048 && hidden != 2560 && hidden != 4096 && hidden != 5120) {
         throw std::invalid_argument("gdn_input_proj_conv_record: unsupported input width");
     }
+    const bool small_hidden        = hidden == 1024 || hidden == 2048;
     const std::int32_t kQueryRows  = 2048;
     const std::int32_t kKeyRows    = 2048;
-    const std::int32_t kValueRows  = hidden == 5120 ? 6144 : (hidden == 2048 ? 2048 : 4096);
-    const std::int32_t kZRows      = hidden == 5120 ? 6144 : (hidden == 2048 ? 2048 : 4096);
+    const std::int32_t kValueRows  = hidden == 5120 ? 6144 : (small_hidden ? 2048 : 4096);
+    const std::int32_t kZRows      = hidden == 5120 ? 6144 : (small_hidden ? 2048 : 4096);
     const std::int32_t kChannels   = kQueryRows + kKeyRows + kValueRows;
     const std::int32_t kParentRows = kValueRows + kZRows;
     const ConvGeometry geometry    = require_record_input(x, hidden);

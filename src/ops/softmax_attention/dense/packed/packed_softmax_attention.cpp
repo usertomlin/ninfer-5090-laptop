@@ -13,10 +13,9 @@
 namespace ninfer::ops {
 namespace {
 
-constexpr std::int32_t kHeads = 16;
-
 // Vision towers differ in head width and so does their softmax temperature: 1/sqrt(64) for the
-// 2B/4B tower and 1/sqrt(72) for the 27B one.
+// 64-wide towers (0.8B/2B/4B) and 1/sqrt(72) for the 27B one. The packed head count is part of the
+// op contract as well; detail::packed_attention_supported_geometry carries the accepted pairs.
 float required_scale(std::int32_t head_dim) {
     switch (head_dim) {
     case 64:
@@ -29,8 +28,10 @@ float required_scale(std::int32_t head_dim) {
 }
 
 void require_geometry(AttentionHeadGeometry geometry, const char* op) {
-    if (!valid_attention_head_geometry(geometry) || required_scale(geometry.head_dim) == 0.0F ||
-        geometry.query_heads != kHeads || geometry.kv_heads != kHeads) {
+    // The packed kernel implements multi-head attention, so the query and key/value head counts must
+    // agree and match an instantiated tower geometry.
+    if (!valid_attention_head_geometry(geometry) || geometry.query_heads != geometry.kv_heads ||
+        !detail::packed_attention_supported_geometry(geometry.head_dim, geometry.query_heads)) {
         throw std::invalid_argument(std::string(op) + ": unsupported head geometry");
     }
 }
@@ -58,15 +59,15 @@ Tensor allocate_workspace(Allocator& allocator, std::int32_t tokens, std::int32_
     return tiles == 0 ? Tensor{} : allocator.alloc(DType::I32, {4, tiles});
 }
 
-void require_qkv(const Tensor& tensor, std::int32_t head_dim, std::int32_t tokens, const char* op,
-                 const char* name) {
-    if (tensor.dtype != DType::BF16 || tensor.ne[0] != head_dim || tensor.ne[1] != kHeads ||
+void require_qkv(const Tensor& tensor, std::int32_t head_dim, std::int32_t heads,
+                 std::int32_t tokens, const char* op, const char* name) {
+    if (tensor.dtype != DType::BF16 || tensor.ne[0] != head_dim || tensor.ne[1] != heads ||
         tensor.ne[2] != tokens || tensor.ne[3] != 1) {
         throw std::invalid_argument(std::string(op) + ": invalid " + name + " shape");
     }
     constexpr std::int64_t elem = 2;
     if (tensor.nb[0] != elem || tensor.nb[1] != elem * head_dim ||
-        tensor.nb[2] < elem * head_dim * kHeads || (tensor.nb[2] % elem) != 0) {
+        tensor.nb[2] < elem * head_dim * heads || (tensor.nb[2] % elem) != 0) {
         throw std::invalid_argument(std::string(op) + ": invalid " + name + " strides");
     }
     if (tensor.data == nullptr) {
@@ -80,10 +81,10 @@ std::int32_t validate_qkv(const Tensor& q, const Tensor& k, const Tensor& v, con
     require_scale(geometry, scale, op);
     const std::int32_t tokens = q.ne[2];
     if (tokens <= 0) { throw std::invalid_argument(std::string(op) + ": T must be positive"); }
-    require_qkv(q, geometry.head_dim, tokens, op, "q");
-    require_qkv(k, geometry.head_dim, tokens, op, "k");
-    require_qkv(v, geometry.head_dim, tokens, op, "v");
-    require_qkv(out, geometry.head_dim, tokens, op, "out");
+    require_qkv(q, geometry.head_dim, geometry.query_heads, tokens, op, "q");
+    require_qkv(k, geometry.head_dim, geometry.kv_heads, tokens, op, "k");
+    require_qkv(v, geometry.head_dim, geometry.kv_heads, tokens, op, "v");
+    require_qkv(out, geometry.head_dim, geometry.query_heads, tokens, op, "out");
     if (!out.is_contiguous()) {
         throw std::invalid_argument(std::string(op) + ": out must be contiguous");
     }

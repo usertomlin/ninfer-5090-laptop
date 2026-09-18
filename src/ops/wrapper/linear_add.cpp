@@ -175,7 +175,9 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
         const bool supported_shape = (w.n == 5120 && w.k == 17408) || (w.n == 5120 && w.k == 6144) ||
                                      (w.n == 4096 && w.k == 4096) || (w.n == 4096 && w.k == 12288) ||
                                      (w.n == 2560 && w.k == 4096) || (w.n == 2560 && w.k == 9216) ||
-                                     (w.n == 2048 && w.k == 2048) || (w.n == 2048 && w.k == 6144);
+                                     (w.n == 2048 && w.k == 2048) || (w.n == 2048 && w.k == 6144) ||
+                                     // Qwen3.5-0.8B attention/GDN output and MLP down projection.
+                                     (w.n == 1024 && w.k == 2048) || (w.n == 1024 && w.k == 3584);
         if (!supported_shape) { throw std::invalid_argument("linear_add: unsupported Q5 shape"); }
         if (!aligned_to(x.data, 16) || !aligned_to(residual_out.data, 16) ||
             !aligned_to(w.qdata, 16) || !aligned_to(w.qhigh, 16) || !aligned_to(w.scales, 16)) {

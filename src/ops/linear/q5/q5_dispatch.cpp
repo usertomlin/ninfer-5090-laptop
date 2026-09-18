@@ -83,6 +83,30 @@ Q5Launch select_q5_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_q5_mma_r64_c128;
         }
         break;
+    case 768:
+        // 0.8B vision tower attention output projection Q5 [768,768].
+        if (n == 768 && t >= 4 && t <= 131072 && (t % 4) == 0) {
+            if (t <= 76) { return launch_q5_simt_r8_c4; }
+            if (t <= 636) { return launch_q5_mma_r64_c64; }
+            if (t <= 700) { return launch_q5_mma_r64_c128; }
+            if (t == 704) { return launch_q5_mma_r64_c64; }
+            if (t <= 828) { return launch_q5_mma_r64_c128; }
+            if (t == 832) { return launch_q5_mma_r64_c64; }
+            if (t <= 896) { return launch_q5_mma_r64_c128; }
+            if (t <= 960) { return launch_q5_mma_r64_c64; }
+            if (t <= 1024) { return launch_q5_mma_r64_c128; }
+            if (t <= 1088) { return launch_q5_mma_r64_c64; }
+            return launch_q5_mma_r64_c128;
+        }
+        break;
+    case 3072:
+        // 0.8B vision tower MLP fc2 Q5 [768,3072].
+        if (n == 768 && t >= 4 && t <= 131072 && (t % 4) == 0) {
+            if (t <= 120) { return launch_q5_simt_r8_c4; }
+            if (t <= 1148) { return launch_q5_mma_r64_c64; }
+            return launch_q5_mma_r64_c128;
+        }
+        break;
     case 4096:
         if (n == 4096) {
             if (t <= 4) { return launch_q5_simt_r8_c4; }

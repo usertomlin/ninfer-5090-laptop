@@ -58,9 +58,19 @@ Q6Launch select_q6_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_q6_mma_r64_c128;
         }
         break;
+    case 1024:
+        if (n == 248320) {
+            // Qwen3.5-0.8B output head Q6 [248320,1024].
+            if (t <= 4) { return launch_q6_simt_r8_c4; }
+            if (t <= 8) { return launch_q6_simt_r8_c8; }
+            if (t <= 64) { return launch_q6_mma_r64_c64; }
+            return launch_q6_mma_r64_c128;
+        }
+        break;
     case 1536:
-        if (n == 1152 || n == 1024) {
-            // 27B vision patch embedding Q6 [1152,1536] and the 2B/4B one Q6 [1024,1536].
+        if (n == 1152 || n == 1024 || n == 768) {
+            // 27B vision patch embedding Q6 [1152,1536], the 2B/4B one Q6 [1024,1536] and the
+            // 0.8B one Q6 [768,1536].
             if (t < 4 || t > 131072 || (t % 4) != 0) { break; }
             if (t <= 96) { return launch_q6_simt_r8_c4; }
             if (t <= 704) { return launch_q6_mma_r64_c64; }

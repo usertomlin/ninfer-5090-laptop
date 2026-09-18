@@ -2,6 +2,7 @@
 
 #include "ninfer/types.h"
 #include "runtime/engine/context_cost.h"
+#include <ninfer/targets/qwen3_5_0_8b/package.h>
 #include <ninfer/targets/qwen3_5_2b/package.h>
 #include <ninfer/targets/qwen3_5_4b/package.h>
 #include <ninfer/targets/qwen3_5_9b/package.h>
@@ -17,11 +18,42 @@ struct DeviceContext;
 
 namespace targets {
 
+using Qwen3_5_0_8B   = qwen3_5_0_8b::Package;
 using Qwen3_5_2B     = qwen3_5_2b::Package;
 using Qwen3_5_4B     = qwen3_5_4b::Package;
 using Qwen3_5_9B     = qwen3_5_9b::Package;
 using Qwen3_6_27B    = qwen3_6_27b::Package;
 using Qwen3_6_35BA3B = qwen3_6_35b_a3b::Package;
+
+struct LoadedQwen3_5_0_8B {
+    std::unique_ptr<Qwen3_5_0_8B::LoadedModel> model;
+    Qwen3_5_0_8B::Frontend frontend;
+
+    LoadedQwen3_5_0_8B(std::unique_ptr<Qwen3_5_0_8B::LoadedModel> stable_model,
+                       const EngineOptions& options);
+    ~LoadedQwen3_5_0_8B();
+
+    LoadedQwen3_5_0_8B(const LoadedQwen3_5_0_8B&)            = delete;
+    LoadedQwen3_5_0_8B& operator=(const LoadedQwen3_5_0_8B&) = delete;
+};
+
+struct Qwen3_5_0_8BInstance {
+    using Package = Qwen3_5_0_8B;
+
+    std::unique_ptr<LoadedQwen3_5_0_8B> loaded;
+    runtime::KvCapacityResolution kv_capacity_resolution;
+    const std::uint32_t capacity;
+    std::unique_ptr<Qwen3_5_0_8B::Program> program;
+
+    Qwen3_5_0_8BInstance(std::unique_ptr<LoadedQwen3_5_0_8B> stable_loaded,
+                         runtime::KvCapacityResolution resolution,
+                         Qwen3_5_0_8B::SequencePlan sequence_plan, DeviceContext& device,
+                         const StartupObserver& startup_observer);
+    ~Qwen3_5_0_8BInstance();
+
+    Qwen3_5_0_8BInstance(const Qwen3_5_0_8BInstance&)            = delete;
+    Qwen3_5_0_8BInstance& operator=(const Qwen3_5_0_8BInstance&) = delete;
+};
 
 struct LoadedQwen3_5_2B {
     std::unique_ptr<Qwen3_5_2B::LoadedModel> model;
@@ -173,7 +205,8 @@ struct Qwen3_6_35BA3BInstance {
     Qwen3_6_35BA3BInstance& operator=(const Qwen3_6_35BA3BInstance&) = delete;
 };
 
-using ActiveTarget = std::variant<std::unique_ptr<Qwen3_5_2BInstance>,
+using ActiveTarget = std::variant<std::unique_ptr<Qwen3_5_0_8BInstance>,
+                                   std::unique_ptr<Qwen3_5_2BInstance>,
                                    std::unique_ptr<Qwen3_5_4BInstance>,
                                    std::unique_ptr<Qwen3_5_9BInstance>,
                                    std::unique_ptr<Qwen3_6_27BInstance>,

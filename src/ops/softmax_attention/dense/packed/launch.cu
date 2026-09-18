@@ -13,16 +13,15 @@ std::int64_t stride_elements(const Tensor& tensor, int dim) {
     return tensor.nb[dim] / static_cast<std::int64_t>(sizeof(__nv_bfloat16));
 }
 
-template <int Br, int Bc, int HeadDim>
+template <int Br, int Bc, int HeadDim, int Heads>
 void launch_flash(const Tensor& q, const Tensor& k, const Tensor& v,
                   const PackedAttentionTile* tiles, std::int32_t uniform_segment_length,
                   std::int32_t query_tiles, float scale, Tensor& out, cudaStream_t stream) {
     constexpr int kThreads = Br * 2;
     constexpr int kSmemBytes =
         (Br + 2 * Bc) * kPackedAttentionPaddedD * static_cast<int>(sizeof(__nv_bfloat16));
-    const dim3 grid(static_cast<unsigned>(query_tiles),
-                    static_cast<unsigned>(kPackedAttentionHeads), 1u);
-    packed_attention_flash_kernel<Br, Bc, HeadDim><<<grid, kThreads, kSmemBytes, stream>>>(
+    const dim3 grid(static_cast<unsigned>(query_tiles), static_cast<unsigned>(Heads), 1u);
+    packed_attention_flash_kernel<Br, Bc, HeadDim, Heads><<<grid, kThreads, kSmemBytes, stream>>>(
         static_cast<const __nv_bfloat16*>(q.data), static_cast<const __nv_bfloat16*>(k.data),
         static_cast<const __nv_bfloat16*>(v.data), tiles, q.ne[2], uniform_segment_length, scale,
         static_cast<__nv_bfloat16*>(out.data), stride_elements(q, 0), stride_elements(q, 1),
@@ -31,24 +30,30 @@ void launch_flash(const Tensor& q, const Tensor& k, const Tensor& v,
     CUDA_CHECK(cudaGetLastError());
 }
 
-// Vision towers pack a head width that varies by model, so both registered widths are instantiated
-// here instead of leaving an uninstantiated template to fail at the call site.
+// Vision towers pack a head count and head width that vary by model, so every registered pair is
+// instantiated here instead of leaving an uninstantiated template to fail at the call site. The
+// accepted pairs match detail::packed_attention_supported_geometry.
 template <int Br, int Bc>
-void launch_flash_by_head_dim(const Tensor& q, const Tensor& k, const Tensor& v,
+void launch_flash_by_geometry(const Tensor& q, const Tensor& k, const Tensor& v,
                               const PackedAttentionTile* tiles, std::int32_t uniform_segment_length,
-                              std::int32_t query_tiles, std::int32_t head_dim, float scale,
-                              Tensor& out, cudaStream_t stream) {
-    if (head_dim == 72) {
-        launch_flash<Br, Bc, 72>(q, k, v, tiles, uniform_segment_length, query_tiles, scale, out,
-                                 stream);
+                              std::int32_t query_tiles, std::int32_t head_dim, std::int32_t heads,
+                              float scale, Tensor& out, cudaStream_t stream) {
+    if (head_dim == 64 && heads == 12) {
+        launch_flash<Br, Bc, 64, 12>(q, k, v, tiles, uniform_segment_length, query_tiles, scale, out,
+                                     stream);
         return;
     }
-    if (head_dim == 64) {
-        launch_flash<Br, Bc, 64>(q, k, v, tiles, uniform_segment_length, query_tiles, scale, out,
-                                 stream);
+    if (head_dim == 64 && heads == 16) {
+        launch_flash<Br, Bc, 64, 16>(q, k, v, tiles, uniform_segment_length, query_tiles, scale, out,
+                                     stream);
         return;
     }
-    throw std::invalid_argument("packed_softmax_attention: unsupported head dim");
+    if (head_dim == 72 && heads == 16) {
+        launch_flash<Br, Bc, 72, 16>(q, k, v, tiles, uniform_segment_length, query_tiles, scale, out,
+                                     stream);
+        return;
+    }
+    throw std::invalid_argument("packed_softmax_attention: unsupported head geometry");
 }
 
 } // namespace
@@ -66,9 +71,9 @@ void packed_attention_launch(const Tensor& q, const Tensor& k, const Tensor& v,
         CUDA_CHECK(cudaGetLastError());
     }
 
-    launch_flash_by_head_dim<kPackedAttentionBr, kPackedAttentionBc>(
+    launch_flash_by_geometry<kPackedAttentionBr, kPackedAttentionBc>(
         q, k, v, packed_segments ? static_cast<const PackedAttentionTile*>(tiles->data) : nullptr,
-        0, max_tiles, q.ne[0], scale, out, stream);
+        0, max_tiles, q.ne[0], q.ne[1], scale, out, stream);
 }
 
 std::int32_t packed_attention_uniform_tile(std::int32_t segment_length) {
@@ -99,16 +104,16 @@ void packed_attention_uniform_launch_with_tile(const Tensor& q, const Tensor& k,
     const std::int32_t query_tiles = segments * ((segment_length + tile_size - 1) / tile_size);
     switch (tile_size) {
     case 16:
-        launch_flash_by_head_dim<16, 16>(q, k, v, nullptr, segment_length, query_tiles, q.ne[0],
-                                         scale, out, stream);
+        launch_flash_by_geometry<16, 16>(q, k, v, nullptr, segment_length, query_tiles, q.ne[0],
+                                         q.ne[1], scale, out, stream);
         return;
     case 32:
-        launch_flash_by_head_dim<32, 32>(q, k, v, nullptr, segment_length, query_tiles, q.ne[0],
-                                         scale, out, stream);
+        launch_flash_by_geometry<32, 32>(q, k, v, nullptr, segment_length, query_tiles, q.ne[0],
+                                         q.ne[1], scale, out, stream);
         return;
     case 64:
-        launch_flash_by_head_dim<64, 64>(q, k, v, nullptr, segment_length, query_tiles, q.ne[0],
-                                         scale, out, stream);
+        launch_flash_by_geometry<64, 64>(q, k, v, nullptr, segment_length, query_tiles, q.ne[0],
+                                         q.ne[1], scale, out, stream);
         return;
     default:
         throw std::invalid_argument("packed_softmax_attention: invalid uniform tile size");

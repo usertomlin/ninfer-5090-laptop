@@ -32,6 +32,8 @@ using AttnInputGeometry4 =
     AttnInputGeometry<5120, 4096, 2560, 2>;
 using AttnInputGeometry2 =
     AttnInputGeometry<2560, 2048, 2048, 2>;
+using AttnInputGeometry08 =
+    AttnInputGeometry<2560, 2048, 1024, 1>;
 
 // The GEMV and split4 kernels own the reduction statically: their compile-time
 // slab ownership must cover K = kFullSlabs * 1024 exactly. Qwen3.5-4B's K=2560
@@ -50,9 +52,11 @@ void launch_q4_gemv(const Tensor& x, const Weight& weight, Tensor& q, Tensor& ke
     using Schedule = std::conditional_t<
         Geometry::kHidden == 5120, Q4GemvR1W8DirectSchedule,
         std::conditional_t<Geometry::kHidden == 4096, Q4GemvR1W8DirectK64Schedule,
-                           Q4GemvR1W8DirectK32Schedule>>;
+                           std::conditional_t<Geometry::kHidden == 2048,
+                                              Q4GemvR1W8DirectK32Schedule,
+                                              Q4GemvR1W8DirectK16Schedule>>>;
     static_assert(Geometry::kHidden == 5120 || Geometry::kHidden == 4096 ||
-                      Geometry::kHidden == 2048,
+                      Geometry::kHidden == 2048 || Geometry::kHidden == 1024,
                   "attention Q4 GEMV geometry must own a static per-row group count");
     constexpr std::int32_t kParentRows = Geometry::kParentRows;
     constexpr std::int32_t kSplitRow   = Geometry::kSplitRow;
@@ -270,6 +274,10 @@ void q4_q5_attn_input_small_t_launch(const Tensor& x, const Weight& query_key_we
     case 2048:
         launch_geometry<AttnInputGeometry2>(x, query_key_weight, gate_value_weight, q, gate, k, v,
                                             stream);
+        return;
+    case 1024:
+        launch_geometry<AttnInputGeometry08>(x, query_key_weight, gate_value_weight, q, gate, k, v,
+                                             stream);
         return;
     default:
         throw std::invalid_argument("attention Q4/Q5 split-output: unsupported input width");

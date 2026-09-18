@@ -11,7 +11,9 @@
 
 namespace ninfer::ops {
 
-inline constexpr int kPackedAttentionHeads   = 16;
+// Packed vision towers differ in head count: the 0.8B tower packs 12 heads and the wider variants
+// pack 16. ``Heads`` therefore travels with the kernel as a template parameter and the registered
+// combinations are instantiated in launch.cu.
 inline constexpr int kPackedAttentionBr      = 64;
 inline constexpr int kPackedAttentionBc      = 64;
 inline constexpr int kPackedAttentionPaddedD = 128;
@@ -98,7 +100,7 @@ packed_attention_stage_kv(__nv_bfloat16* dst, const __nv_bfloat16* src, int key0
     }
 }
 
-template <int Br, int Bc, int HeadDim>
+template <int Br, int Bc, int HeadDim, int Heads>
 __launch_bounds__(Br * 2, 128 / Br) __global__ void packed_attention_flash_kernel(
     const __nv_bfloat16* __restrict__ q, const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v, const PackedAttentionTile* __restrict__ tiles,
@@ -361,12 +363,12 @@ __launch_bounds__(Br * 2, 128 / Br) __global__ void packed_attention_flash_kerne
         const int query1 = query0 + 8;
         if (query0 < tile.end) {
             const std::int64_t offset =
-                (static_cast<std::int64_t>(query0) * kPackedAttentionHeads + head) * D + d0;
+                (static_cast<std::int64_t>(query0) * Heads + head) * D + d0;
             store_vec(&out[offset], pack_bf16x2(acc[n][0] * inv_l0, acc[n][1] * inv_l0));
         }
         if (query1 < tile.end) {
             const std::int64_t offset =
-                (static_cast<std::int64_t>(query1) * kPackedAttentionHeads + head) * D + d0;
+                (static_cast<std::int64_t>(query1) * Heads + head) * D + d0;
             store_vec(&out[offset], pack_bf16x2(acc[n][2] * inv_l1, acc[n][3] * inv_l1));
         }
     }

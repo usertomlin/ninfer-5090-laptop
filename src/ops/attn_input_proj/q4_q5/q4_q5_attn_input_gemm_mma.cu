@@ -96,11 +96,15 @@ using AttnInputMmaGeometry9  = AttnInputMmaGeometry<4096, 5120, 4096, 1024>;
 using AttnInputMmaGeometry4  = AttnInputMmaGeometry<2560, 5120, 4096, 1024>;
 // Qwen3.5-2B: 8 query heads and 2 KV heads of width 256 over hidden=2048.
 using AttnInputMmaGeometry2  = AttnInputMmaGeometry<2048, 2560, 2048, 512>;
+// Qwen3.5-0.8B: 8 query heads and 2 KV heads of width 256 over hidden=1024.
+using AttnInputMmaGeometry08 = AttnInputMmaGeometry<1024, 2560, 2048, 512>;
 using MmaR32C64S4            = GemmCfg<32, 64, 64, 16, 16, 4, 1, false, true, true>;
 
 template <class Fn>
 void dispatch_input_geometry(std::int32_t input_rows, Fn&& fn) {
     switch (input_rows) {
+    case AttnInputMmaGeometry08::kInputRows:
+        return fn.template operator()<AttnInputMmaGeometry08>();
     case AttnInputMmaGeometry2::kInputRows:
         return fn.template operator()<AttnInputMmaGeometry2>();
     case AttnInputMmaGeometry4::kInputRows:

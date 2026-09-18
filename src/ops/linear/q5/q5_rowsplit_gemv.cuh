@@ -22,6 +22,7 @@
 #include "ops/common/math.h"
 #include "ops/common/memory.cuh"
 #include "ops/common/warp.cuh"
+#include "ops/linear/q5/q5_rowsplit_storage.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -81,7 +82,8 @@ __device__ __forceinline__ float q5_gemv_consume_tile(const __nv_bfloat162* __re
     return acc;
 }
 
-// kN  : output rows, kK : reduction dim (multiple of 1024).
+// kN  : output rows, kK : reduction dim (a multiple of the 64-value quant group;
+//       a K that is not a whole number of 16-group tiles runs a scalar tail).
 // kRowsPerBlock : rows (= warps) per block.
 // kStages : cp.async pipeline depth (shared buffers; >=2 to overlap).
 // kStageX : stage the activation vector into shared (false when x is too large).
@@ -113,11 +115,12 @@ q5_rowsplit_gemv_kernel(const __nv_bfloat16* __restrict__ x, const std::uint8_t*
     constexpr int kGroups              = kK / kGroupK;
     constexpr int kGroupsPerTile       = 16;
     constexpr int kTiles               = kGroups / kGroupsPerTile;
+    constexpr int kTailGroups          = kGroups % kGroupsPerTile;
     constexpr int kNibbleBytesPerGroup = 32;
     constexpr int kHighBytesPerGroup   = 8;
     constexpr int kXVecs               = kK / 8; // x as uint4 (8 bf16 each)
     constexpr int kPrefetch            = kStages - 1;
-    static_assert(kGroups % kGroupsPerTile == 0, "K must be a multiple of 16 groups (1024)");
+    static_assert(kK % kGroupK == 0, "K must be a multiple of the 64-value quant group");
     static_assert(kN % kRowsPerBlock == 0, "N must be a multiple of kRowsPerBlock");
     static_assert(kStages >= 2, "need at least double buffering");
     static_assert(!kSplitOutput || (kSplitRow > 0 && kSplitRow < kN),
@@ -187,6 +190,25 @@ q5_rowsplit_gemv_kernel(const __nv_bfloat16* __restrict__ x, const std::uint8_t*
         acc = q5_gemv_consume_tile(x2, s_nib[warp][buf], s_hi[warp][buf], s_sc[warp][buf], tile,
                                    lane, acc);
         __syncwarp();
+    }
+
+    // Partial trailing tile: K is not always a whole number of 16-group tiles (the
+    // Qwen3.5-0.8B MLP down projection has K=3584 = 3.5 tiles). Decode those groups
+    // straight from the row planes. Compiled out when kTailGroups == 0, so every
+    // multiple-of-1024 shape keeps its original pipeline.
+    if constexpr (kTailGroups > 0) {
+#pragma unroll
+        for (int g = 0; g < kTailGroups; ++g) {
+            const int group = kTiles * kGroupsPerTile + g;
+            float w0        = 0.0f;
+            float w1        = 0.0f;
+            Q5ScalarDecodeAtom::load_pair(codes, high_bits, scales,
+                                          static_cast<std::int64_t>(row) * kGroups + group, lane,
+                                          w0, w1);
+            const float2 xv = __bfloat1622float2(x2[(group * kGroupK + lane * 2) >> 1]);
+            acc             = fmaf(w0, xv.x, acc);
+            acc             = fmaf(w1, xv.y, acc);
+        }
     }
 
     acc = warp_reduce_sum(acc);

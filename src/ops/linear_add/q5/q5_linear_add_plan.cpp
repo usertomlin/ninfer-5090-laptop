@@ -31,7 +31,7 @@ struct RouteSpec {
     Q5LinearAddScheduleId schedule;
 };
 
-constexpr std::array<SupportSpec, 8> kSupports{{
+constexpr std::array<SupportSpec, 10> kSupports{{
     {5120, 6144, 6144},
     {5120, 17408, 17408},
     {4096, 4096, 4096},
@@ -41,6 +41,9 @@ constexpr std::array<SupportSpec, 8> kSupports{{
     // Qwen3.5-2B: attention/GDN output projection and MLP down projection.
     {2048, 2048, 2048},
     {2048, 6144, 6144},
+    // Qwen3.5-0.8B: attention/GDN output projection and MLP down projection.
+    {1024, 2048, 2048},
+    {1024, 3584, 3584},
 }};
 
 constexpr std::array<RouteSpec, 6> kK6144Routes{{
@@ -61,6 +64,16 @@ constexpr std::array<RouteSpec, 6> kK17408Routes{{
     {{193, kAnyCols}, Q5LinearAddScheduleId::MmaResidualR64C128},
 }};
 
+// K=3584 (Qwen3.5-0.8B MLP down projection) is 3.5 split2 slabs, so the exact-SIMT
+// split2 schedule has no admissible form and every token count above 1 routes to MMA.
+constexpr std::array<RouteSpec, 5> kK3584Routes{{
+    {{1, 1}, Q5LinearAddScheduleId::GemvResidual},
+    {{2, 32}, Q5LinearAddScheduleId::MmaResidualR64C16},
+    {{33, 48}, Q5LinearAddScheduleId::MmaResidualR64C24},
+    {{49, 192}, Q5LinearAddScheduleId::MmaResidualR64C32S3},
+    {{193, kAnyCols}, Q5LinearAddScheduleId::MmaResidualR64C128},
+}};
+
 template <std::size_t N>
 constexpr bool catalog_is_closed(const std::array<RouteSpec, N>& routes) noexcept {
     std::int64_t expected = 1;
@@ -72,7 +85,8 @@ constexpr bool catalog_is_closed(const std::array<RouteSpec, N>& routes) noexcep
            expected == static_cast<std::int64_t>(kAnyCols) + 1;
 }
 
-static_assert(catalog_is_closed(kK6144Routes) && catalog_is_closed(kK17408Routes),
+static_assert(catalog_is_closed(kK6144Routes) && catalog_is_closed(kK17408Routes) &&
+                  catalog_is_closed(kK3584Routes),
               "Q5 LinearAdd routes must be exact, contiguous, and closed");
 
 bool supported_shape(const Q5LinearAddProblem& problem) noexcept {
@@ -122,7 +136,9 @@ Q5LinearAddPlan q5_linear_add_resolve_plan(const Q5LinearAddProblem& problem) {
         }
         throw std::logic_error("q5 linear_add: admitted problem has no covering route");
     };
-    return problem.k == 6144 ? resolve_from(kK6144Routes) : resolve_from(kK17408Routes);
+    if (problem.k == 6144) { return resolve_from(kK6144Routes); }
+    if (problem.k == 3584) { return resolve_from(kK3584Routes); }
+    return resolve_from(kK17408Routes);
 }
 
 std::size_t q5_linear_add_capacity_workspace_bytes(std::int32_t rows, std::int32_t k,

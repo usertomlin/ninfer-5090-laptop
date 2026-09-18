@@ -86,12 +86,18 @@ void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, L
     const bool q4_4_shape = x.ne[0] == 2560 && out.ne[0] == 9216 && gate_up_weight.n == 18432 &&
                             gate_up_weight.k == 2560 && gate_up_weight.padded_shape[0] == 18432 &&
                             gate_up_weight.padded_shape[1] == 2560;
+    // Qwen3.5-0.8B main MLP. Only Q4 reaches this route; the 0.8B MTP MLP materializes its W8
+    // gate_up projection through the plain linear op instead.
+    const bool q4_08_shape = x.ne[0] == 1024 && out.ne[0] == 3584 && gate_up_weight.n == 7168 &&
+                             gate_up_weight.k == 1024 && gate_up_weight.padded_shape[0] == 7168 &&
+                             gate_up_weight.padded_shape[1] == 1024;
     // Shared by the 2B main MLP (Q4) and the 2B MTP / 35B-A3B dflash MLP (W8).
     const bool small_shape = x.ne[0] == 2048 && out.ne[0] == 6144 && gate_up_weight.n == 12288 &&
                              gate_up_weight.k == 2048 && gate_up_weight.padded_shape[0] == 12288 &&
                              gate_up_weight.padded_shape[1] == 2048;
+    const bool known_shape = large_shape || q4_9_shape || q4_4_shape || q4_08_shape || small_shape;
     if (t <= 0 || x.ne[2] != 1 || x.ne[3] != 1 || out.ne[1] != t || out.ne[2] != 1 ||
-        out.ne[3] != 1 || (!large_shape && !q4_9_shape && !q4_4_shape && !small_shape)) {
+        out.ne[3] != 1 || !known_shape) {
         throw std::invalid_argument("linear_swiglu: invalid tensor shape");
     }
     if (!x.is_contiguous() || !out.is_contiguous()) {
@@ -107,8 +113,7 @@ void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, L
         gate_up_weight.shape[0] == gate_up_weight.n &&
         gate_up_weight.shape[1] == gate_up_weight.k && gate_up_weight.qdata != nullptr &&
         gate_up_weight.scales != nullptr;
-    const bool q4_weight = (large_shape || q4_9_shape || q4_4_shape || small_shape) &&
-                           gate_up_weight.qtype == QType::Q4G64_F16S &&
+    const bool q4_weight = known_shape && gate_up_weight.qtype == QType::Q4G64_F16S &&
                            gate_up_weight.group_size == 64 && gate_up_weight.group == 64 &&
                            common_row_split;
     const bool w8_weight = (small_shape || large_shape) && gate_up_weight.qtype == QType::W8G32_F16S &&

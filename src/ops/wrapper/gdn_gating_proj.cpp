@@ -93,9 +93,11 @@ std::int32_t gating_heads_for_width(std::int32_t width, const char* op) {
         return 32;
     case 2048:
         return 16;
+    case 1024:
+        return 16;
     default:
         throw std::invalid_argument(std::string(op) +
-                                    ": x width must be 2048, 2560, 4096 or 5120");
+                                    ": x width must be 1024, 2048, 2560, 4096 or 5120");
     }
 }
 

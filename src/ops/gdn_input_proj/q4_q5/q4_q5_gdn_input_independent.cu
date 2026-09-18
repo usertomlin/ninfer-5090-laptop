@@ -35,6 +35,8 @@ using GdnInputGeometry4 =
     GdnInputGeometry<4096, 4096, 4096, 2560, 2>;
 using GdnInputGeometry2 =
     GdnInputGeometry<4096, 2048, 2048, 2048, 2>;
+using GdnInputGeometry08 =
+    GdnInputGeometry<4096, 2048, 2048, 1024, 1>;
 
 // The GEMV, split4, and split4-PDL kernels own their reduction statically: their
 // compile-time slab count must cover K = kFullSlabs * 1024 exactly. Qwen3.5-4B's
@@ -52,10 +54,12 @@ void launch_q4_gemv(const Tensor& x, const Weight& weight, Tensor& out, cudaStre
     // The R1W8 schedule owns a static group count per row that must match K.
     using Schedule = std::conditional_t<
         Geometry::kHidden == 5120, Q4GemvR1W8DirectSchedule,
-        std::conditional_t<Geometry::kHidden == 4096, Q4GemvR1W8DirectK64Schedule,
-                           Q4GemvR1W8DirectK32Schedule>>;
+        std::conditional_t<
+            Geometry::kHidden == 4096, Q4GemvR1W8DirectK64Schedule,
+            std::conditional_t<Geometry::kHidden == 2048, Q4GemvR1W8DirectK32Schedule,
+                               Q4GemvR1W8DirectK16Schedule>>>;
     static_assert(Geometry::kHidden == 5120 || Geometry::kHidden == 4096 ||
-                      Geometry::kHidden == 2048,
+                      Geometry::kHidden == 2048 || Geometry::kHidden == 1024,
                   "GDN Q4 GEMV geometry must own a static per-row group count");
     constexpr std::int32_t kQkRows = Geometry::kQkRows;
     constexpr std::int32_t kHidden = Geometry::kHidden;
@@ -289,6 +293,9 @@ void q4_q5_gdn_input_independent_launch(const Tensor& x, const Weight& qk_weight
         return;
     case 2048:
         launch_geometry<GdnInputGeometry2>(x, qk_weight, value_z_weight, qk, value, z, stream);
+        return;
+    case 1024:
+        launch_geometry<GdnInputGeometry08>(x, qk_weight, value_z_weight, qk, value, z, stream);
         return;
     default:
         throw std::invalid_argument("GDN Q4/Q5 independent launch: unsupported input width");

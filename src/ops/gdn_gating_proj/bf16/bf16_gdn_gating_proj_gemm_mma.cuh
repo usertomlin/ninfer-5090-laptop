@@ -7,9 +7,10 @@
 //   Qwen3.5-9B:      a/b = W[32,4096] @ x[4096,T]
 //   Qwen3.5-4B:      a/b = W[32,2560] @ x[2560,T]
 //   Qwen3.5-2B:      a/b = W[16,2048] @ x[2048,T]
+//   Qwen3.5-0.8B:    a/b = W[16,1024] @ x[1024,T]
 //
 // A CTA computes the same 16 output rows from both weights over 128 (27B) or
-// 64 (35B/9B/4B/2B) tokens.
+// 64 (35B/9B/4B/2B/0.8B) tokens.
 // Split-K routes use a tuned eight- or sixteen-warp specialization and an
 // in-kernel cooperative grid reduction; the unsplit long-context route uses
 // eight warps for more independent MMA accumulators. One cooperative launch remains fused, while
@@ -69,11 +70,18 @@ struct Bf16Gdn2Geometry {
     static constexpr int kBlockN = 64;
 };
 
+struct Bf16Gdn08Geometry {
+    static constexpr int kHeads  = 16;
+    static constexpr int kHidden = 1024;
+    static constexpr int kBlockN = 64;
+};
+
 static_assert(Bf16Gdn27Geometry::kHidden % kBf16GdnBlockK == 0);
 static_assert(Bf16Gdn35Geometry::kHidden % kBf16GdnBlockK == 0);
 static_assert(Bf16Gdn9Geometry::kHidden % kBf16GdnBlockK == 0);
 static_assert(Bf16Gdn4Geometry::kHidden % kBf16GdnBlockK == 0);
 static_assert(Bf16Gdn2Geometry::kHidden % kBf16GdnBlockK == 0);
+static_assert(Bf16Gdn08Geometry::kHidden % kBf16GdnBlockK == 0);
 
 __device__ __forceinline__ int bf16_gdn_swizzle(int row, int col) {
     return (col & ~63) + gemm_swz64(row, col & 63);

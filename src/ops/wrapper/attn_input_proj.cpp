@@ -283,6 +283,20 @@ void attn_input_proj(const Tensor& x, const Weight& query_key_weight,
                          "gate/value weight");
         break;
     }
+    case 1024: {
+        constexpr std::int32_t kQRows  = 2048;
+        constexpr std::int32_t kKvRows = 512;
+        require_matrix(x, 1024, cols, "x");
+        require_matrix(q, kQRows, cols, "q");
+        require_matrix(gate, kQRows, cols, "gate");
+        require_matrix(k, kKvRows, cols, "k");
+        require_matrix(v, kKvRows, cols, "v");
+        require_rowsplit(query_key_weight, QType::Q4G64_F16S, kQRows + kKvRows, 1024,
+                         "query/key weight");
+        require_rowsplit(gate_value_weight, QType::Q5G64_F16S, kQRows + kKvRows, 1024,
+                         "gate/value weight");
+        break;
+    }
     default:
         throw std::invalid_argument("attn_input_proj: unsupported input width");
     }
