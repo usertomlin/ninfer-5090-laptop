@@ -116,7 +116,8 @@ struct DFlash2Weights {
 
 template <class FullProjectionPayload, class GdnProjectionPayload, class MainPostMixerPayload,
           class MtpAttentionPayload, class MtpPostMixerPayload, class DFlashPayload,
-          std::size_t FullAttentionLayers, std::size_t GdnLayers>
+          std::size_t FullAttentionLayers, std::size_t GdnLayers,
+          class VisionPayload = VisionWeights>
 struct ModelView {
     using FullLayer = FullAttentionWeights<FullProjectionPayload, MainPostMixerPayload>;
     using GdnLayer  = GdnWeights<GdnProjectionPayload, MainPostMixerPayload>;
@@ -133,7 +134,7 @@ struct ModelView {
     std::optional<OptimizedProposalWeights> optimized_proposal;
     std::optional<MtpLayer> mtp;
     std::optional<DFlashPayload> dflash;
-    std::optional<VisionWeights> vision;
+    std::optional<VisionPayload> vision;
 };
 
 } // namespace targets::qwen3_6

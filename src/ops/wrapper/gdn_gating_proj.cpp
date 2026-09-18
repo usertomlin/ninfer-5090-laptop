@@ -60,6 +60,10 @@ GdnControlParentGeometry require_bf16_parent(const Weight& parent) {
         require_bf16_weight(parent, 64, 4096, "ab_weight");
         return {.input_rows = 4096, .heads = 32};
     }
+    if (parent.n == 64 && parent.k == 2560) {
+        require_bf16_weight(parent, 64, 2560, "ab_weight");
+        return {.input_rows = 2560, .heads = 32};
+    }
     throw std::invalid_argument("gdn_gating_proj: unsupported ab_weight geometry");
 }
 
@@ -85,8 +89,13 @@ std::int32_t gating_heads_for_width(std::int32_t width, const char* op) {
         return 48;
     case 4096:
         return 32;
+    case 2560:
+        return 32;
+    case 2048:
+        return 16;
     default:
-        throw std::invalid_argument(std::string(op) + ": x width must be 5120 or 4096");
+        throw std::invalid_argument(std::string(op) +
+                                    ": x width must be 2048, 2560, 4096 or 5120");
     }
 }
 

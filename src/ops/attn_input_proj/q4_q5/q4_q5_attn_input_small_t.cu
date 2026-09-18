@@ -28,6 +28,17 @@ using AttnInputGeometry27 =
     AttnInputGeometry<7168, 6144, 5120, 5>;
 using AttnInputGeometry9 =
     AttnInputGeometry<5120, 4096, 4096, 4>;
+using AttnInputGeometry4 =
+    AttnInputGeometry<5120, 4096, 2560, 2>;
+using AttnInputGeometry2 =
+    AttnInputGeometry<2560, 2048, 2048, 2>;
+
+// The GEMV and split4 kernels own the reduction statically: their compile-time
+// slab ownership must cover K = kFullSlabs * 1024 exactly. Qwen3.5-4B's K=2560
+// is not a whole number of 1024-value slabs, so every column count uses the
+// runtime-tail SIMT kernels, matching the plain Q5 linear route for odd K.
+template <class Geometry>
+inline constexpr bool kExactSlabCoverage = Geometry::kHidden == Geometry::kFullSlabs * 1024;
 
 using Q4AttnSimtR8C4Schedule = Q4RowSplitSimtGemmSchedule<8, 4, 16, 2, Cache::ca, 1>;
 using Q4AttnSimtR8C8Schedule = Q4RowSplitSimtGemmSchedule<8, 8, 16, 2, Cache::ca, 1>;
@@ -35,8 +46,14 @@ using Q4AttnSimtR8C8Schedule = Q4RowSplitSimtGemmSchedule<8, 8, 16, 2, Cache::ca
 template <class Geometry>
 void launch_q4_gemv(const Tensor& x, const Weight& weight, Tensor& q, Tensor& key,
                     cudaStream_t stream) {
-    using Schedule = std::conditional_t<Geometry::kHidden == 4096,
-                                        Q4GemvR1W8DirectK64Schedule, Q4GemvR1W8DirectSchedule>;
+    // The R1W8 schedule owns a static group count per row that must match K.
+    using Schedule = std::conditional_t<
+        Geometry::kHidden == 5120, Q4GemvR1W8DirectSchedule,
+        std::conditional_t<Geometry::kHidden == 4096, Q4GemvR1W8DirectK64Schedule,
+                           Q4GemvR1W8DirectK32Schedule>>;
+    static_assert(Geometry::kHidden == 5120 || Geometry::kHidden == 4096 ||
+                      Geometry::kHidden == 2048,
+                  "attention Q4 GEMV geometry must own a static per-row group count");
     constexpr std::int32_t kParentRows = Geometry::kParentRows;
     constexpr std::int32_t kSplitRow   = Geometry::kSplitRow;
     constexpr std::int32_t kHidden     = Geometry::kHidden;
@@ -87,7 +104,11 @@ template <class Geometry>
 void launch_q4(const Tensor& x, const Weight& weight, Tensor& q, Tensor& key, cudaStream_t stream) {
     switch (x.ne[1]) {
     case 1:
-        launch_q4_gemv<Geometry>(x, weight, q, key, stream);
+        if constexpr (kExactSlabCoverage<Geometry>) {
+            launch_q4_gemv<Geometry>(x, weight, q, key, stream);
+        } else {
+            launch_q4_simt_route<Geometry, Q4AttnSimtR8C4Schedule>(x, weight, q, key, stream);
+        }
         return;
     case 2:
     case 3:
@@ -204,13 +225,15 @@ void launch_q5_simt(const Tensor& x, const Weight& weight, Tensor& gate, Tensor&
 template <class Geometry>
 void launch_q5(const Tensor& x, const Weight& weight, Tensor& gate, Tensor& value,
                cudaStream_t stream) {
-    if (x.ne[1] == 1) {
-        launch_q5_gemv<Geometry>(x, weight, gate, value, stream);
-        return;
-    }
-    if (x.ne[1] <= 6) {
-        launch_q5_split4_exact<Geometry>(x, weight, gate, value, stream);
-        return;
+    if constexpr (kExactSlabCoverage<Geometry>) {
+        if (x.ne[1] == 1) {
+            launch_q5_gemv<Geometry>(x, weight, gate, value, stream);
+            return;
+        }
+        if (x.ne[1] <= 6) {
+            launch_q5_split4_exact<Geometry>(x, weight, gate, value, stream);
+            return;
+        }
     }
     if (x.ne[1] <= 16) {
         launch_q5_simt<Geometry, 4>(x, weight, gate, value, stream);
@@ -238,6 +261,14 @@ void q4_q5_attn_input_small_t_launch(const Tensor& x, const Weight& query_key_we
         return;
     case 4096:
         launch_geometry<AttnInputGeometry9>(x, query_key_weight, gate_value_weight, q, gate, k, v,
+                                            stream);
+        return;
+    case 2560:
+        launch_geometry<AttnInputGeometry4>(x, query_key_weight, gate_value_weight, q, gate, k, v,
+                                            stream);
+        return;
+    case 2048:
+        launch_geometry<AttnInputGeometry2>(x, query_key_weight, gate_value_weight, q, gate, k, v,
                                             stream);
         return;
     default:

@@ -72,6 +72,12 @@ void launch_slice_geometry(const Tensor& x, const Weight& qk_weight, const Weigh
     case 4096:
         launch_slice<4096>(full, x, qk_weight, value_z_weight, qkv, z, stream);
         return;
+    case 2560:
+        launch_slice<4096>(full, x, qk_weight, value_z_weight, qkv, z, stream);
+        return;
+    case 2048:
+        launch_slice<2048>(full, x, qk_weight, value_z_weight, qkv, z, stream);
+        return;
     default:
         throw std::invalid_argument("GDN Q4/Q5 grouped MMA: unsupported input width");
     }

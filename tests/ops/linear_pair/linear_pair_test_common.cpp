@@ -94,7 +94,7 @@ std::vector<std::int32_t> conformance_tokens(const ShapeCase& shape) {
 PairFixture make_pair_fixture(std::int32_t k, std::uint32_t seed) {
     const quantized_weight::PatternedWeightOptions options{
         quantized_weight::RowSplitScalePattern::Tiny};
-    if (k == 5120) {
+    if (k == 5120 || k == 2560) {
         return {
             false,
             quantized_weight::make_patterned_weight(QType::W8G32_F16S, kOutputRows, k, seed,

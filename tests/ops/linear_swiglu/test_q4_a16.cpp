@@ -14,9 +14,13 @@ int main() {
         constexpr std::array<std::int32_t, 27> kTokenCases{
             1, 2, 7, 8, 9, 16, 17, 24, 25, 31, 32, 33, 40, 41, 48, 49, 96, 128, 129, 256, 257, 384, 385, 512, 513, 640, 641,
         };
-        const int failures = run_profile(
+        int failures = run_profile(
             "LinearSwiGLU Q4_A16",
             {QType::Q4G64_F16S, 34816, 5120, 17408, 1401U, ActivationCompute::A16}, kTokenCases, std::array<std::int32_t, 4>{7, 25, 49, 128});
+        failures += run_profile(
+            "LinearSwiGLU Q4_A16 4B",
+            {QType::Q4G64_F16S, 18432, 2560, 9216, 2601U, ActivationCompute::A16}, kTokenCases,
+            std::array<std::int32_t, 4>{7, 25, 49, 128});
         std::cout << (failures == 0 ? "OK" : "FAIL") << " LinearSwiGLU Q4_A16 correctness\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

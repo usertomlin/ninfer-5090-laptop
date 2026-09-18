@@ -24,6 +24,12 @@ int q5_a16_conformance() {
     failures += ninfer::test::linear_add::run_shape(
         "Q5_A16 LinearAdd", WeightFormat::Q5G64F16S,
         ShapeCase{5120, 17408, 409U, kK17408RouteStarts, kK17408RouteInteriors});
+    failures += ninfer::test::linear_add::run_shape(
+        "Q5_A16 LinearAdd", WeightFormat::Q5G64F16S,
+        ShapeCase{2560, 4096, 421U, kK17408RouteStarts, kK17408RouteInteriors});
+    failures += ninfer::test::linear_add::run_shape(
+        "Q5_A16 LinearAdd", WeightFormat::Q5G64F16S,
+        ShapeCase{2560, 9216, 431U, kK17408RouteStarts, kK17408RouteInteriors});
     return failures;
 }
 

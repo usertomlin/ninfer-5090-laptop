@@ -2,6 +2,8 @@
 
 #include "ninfer/types.h"
 #include "runtime/engine/context_cost.h"
+#include <ninfer/targets/qwen3_5_2b/package.h>
+#include <ninfer/targets/qwen3_5_4b/package.h>
 #include <ninfer/targets/qwen3_5_9b/package.h>
 #include <ninfer/targets/qwen3_6_27b/package.h>
 #include <ninfer/targets/qwen3_6_35b_a3b/package.h>
@@ -15,9 +17,71 @@ struct DeviceContext;
 
 namespace targets {
 
+using Qwen3_5_2B     = qwen3_5_2b::Package;
+using Qwen3_5_4B     = qwen3_5_4b::Package;
 using Qwen3_5_9B     = qwen3_5_9b::Package;
 using Qwen3_6_27B    = qwen3_6_27b::Package;
 using Qwen3_6_35BA3B = qwen3_6_35b_a3b::Package;
+
+struct LoadedQwen3_5_2B {
+    std::unique_ptr<Qwen3_5_2B::LoadedModel> model;
+    Qwen3_5_2B::Frontend frontend;
+
+    LoadedQwen3_5_2B(std::unique_ptr<Qwen3_5_2B::LoadedModel> stable_model,
+                     const EngineOptions& options);
+    ~LoadedQwen3_5_2B();
+
+    LoadedQwen3_5_2B(const LoadedQwen3_5_2B&)            = delete;
+    LoadedQwen3_5_2B& operator=(const LoadedQwen3_5_2B&) = delete;
+};
+
+struct Qwen3_5_2BInstance {
+    using Package = Qwen3_5_2B;
+
+    std::unique_ptr<LoadedQwen3_5_2B> loaded;
+    runtime::KvCapacityResolution kv_capacity_resolution;
+    const std::uint32_t capacity;
+    std::unique_ptr<Qwen3_5_2B::Program> program;
+
+    Qwen3_5_2BInstance(std::unique_ptr<LoadedQwen3_5_2B> stable_loaded,
+                       runtime::KvCapacityResolution resolution,
+                       Qwen3_5_2B::SequencePlan sequence_plan, DeviceContext& device,
+                       const StartupObserver& startup_observer);
+    ~Qwen3_5_2BInstance();
+
+    Qwen3_5_2BInstance(const Qwen3_5_2BInstance&)            = delete;
+    Qwen3_5_2BInstance& operator=(const Qwen3_5_2BInstance&) = delete;
+};
+
+struct LoadedQwen3_5_4B {
+    std::unique_ptr<Qwen3_5_4B::LoadedModel> model;
+    Qwen3_5_4B::Frontend frontend;
+
+    LoadedQwen3_5_4B(std::unique_ptr<Qwen3_5_4B::LoadedModel> stable_model,
+                     const EngineOptions& options);
+    ~LoadedQwen3_5_4B();
+
+    LoadedQwen3_5_4B(const LoadedQwen3_5_4B&)            = delete;
+    LoadedQwen3_5_4B& operator=(const LoadedQwen3_5_4B&) = delete;
+};
+
+struct Qwen3_5_4BInstance {
+    using Package = Qwen3_5_4B;
+
+    std::unique_ptr<LoadedQwen3_5_4B> loaded;
+    runtime::KvCapacityResolution kv_capacity_resolution;
+    const std::uint32_t capacity;
+    std::unique_ptr<Qwen3_5_4B::Program> program;
+
+    Qwen3_5_4BInstance(std::unique_ptr<LoadedQwen3_5_4B> stable_loaded,
+                       runtime::KvCapacityResolution resolution,
+                       Qwen3_5_4B::SequencePlan sequence_plan, DeviceContext& device,
+                       const StartupObserver& startup_observer);
+    ~Qwen3_5_4BInstance();
+
+    Qwen3_5_4BInstance(const Qwen3_5_4BInstance&)            = delete;
+    Qwen3_5_4BInstance& operator=(const Qwen3_5_4BInstance&) = delete;
+};
 
 struct LoadedQwen3_5_9B {
     std::unique_ptr<Qwen3_5_9B::LoadedModel> model;
@@ -109,9 +173,11 @@ struct Qwen3_6_35BA3BInstance {
     Qwen3_6_35BA3BInstance& operator=(const Qwen3_6_35BA3BInstance&) = delete;
 };
 
-using ActiveTarget = std::variant<std::unique_ptr<Qwen3_5_9BInstance>,
-                                  std::unique_ptr<Qwen3_6_27BInstance>,
-                                  std::unique_ptr<Qwen3_6_35BA3BInstance>>;
+using ActiveTarget = std::variant<std::unique_ptr<Qwen3_5_2BInstance>,
+                                   std::unique_ptr<Qwen3_5_4BInstance>,
+                                   std::unique_ptr<Qwen3_5_9BInstance>,
+                                   std::unique_ptr<Qwen3_6_27BInstance>,
+                                   std::unique_ptr<Qwen3_6_35BA3BInstance>>;
 
 struct ConstructedTarget {
     ActiveTarget active;

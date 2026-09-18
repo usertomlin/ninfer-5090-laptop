@@ -218,8 +218,11 @@ int verify_unchanged(std::string_view label, const test::GuardedDeviceBuffer& de
 }
 
 void validate_profile(const Profile& profile) {
-    const bool q4 = profile.qtype == QType::Q4G64_F16S && profile.gate_up_rows == 34816 &&
-                    profile.input_rows == 5120 && profile.output_rows == 17408;
+    const bool q4 = profile.qtype == QType::Q4G64_F16S &&
+                    ((profile.gate_up_rows == 34816 && profile.input_rows == 5120 &&
+                      profile.output_rows == 17408) ||
+                     (profile.gate_up_rows == 18432 && profile.input_rows == 2560 &&
+                      profile.output_rows == 9216));
     const bool w8_companion = profile.qtype == QType::W8G32_F16S && profile.gate_up_rows == 12288 &&
                               profile.input_rows == 2048 && profile.output_rows == 6144;
     const bool w8_dflash2 = profile.qtype == QType::W8G32_F16S && profile.gate_up_rows == 34816 &&

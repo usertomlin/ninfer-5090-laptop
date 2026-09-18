@@ -107,4 +107,46 @@ void bf16_gdn_gating_proj_9_mma_unsplit_launch(Bf16GdnGatingTokenVariant variant
                                                const Tensor& A_log, const Tensor& dt_bias,
                                                Tensor& g, Tensor& beta, cudaStream_t stream);
 
+// The 4B gating geometry (32 heads x 2560 input rows) has 40 K tiles, so only split 8/4/2 divide it
+// exactly; there is no split-16/32 lane and the fused split-32 input normalization is unavailable.
+[[nodiscard]] bool bf16_gdn_gating_proj_4_mma_split8_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+[[nodiscard]] bool bf16_gdn_gating_proj_4_mma_split4_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+[[nodiscard]] bool bf16_gdn_gating_proj_4_mma_split2_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+void bf16_gdn_gating_proj_4_mma_unsplit_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
+                                                const Weight& a_weight, const Weight& b_weight,
+                                                const Tensor& A_log, const Tensor& dt_bias,
+                                                Tensor& g, Tensor& beta, cudaStream_t stream);
+
+// The 2B gating geometry (16 heads x 2048 input rows) has 32 K tiles, so split 16/8/4/2 all divide
+// it exactly; there is no split-32 lane and the fused split-32 input normalization is unavailable.
+[[nodiscard]] bool bf16_gdn_gating_proj_2_mma_split16_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+[[nodiscard]] bool bf16_gdn_gating_proj_2_mma_split8_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+[[nodiscard]] bool bf16_gdn_gating_proj_2_mma_split4_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+[[nodiscard]] bool bf16_gdn_gating_proj_2_mma_split2_launch(
+    Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
+    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace, Tensor& g,
+    Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream);
+void bf16_gdn_gating_proj_2_mma_unsplit_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
+                                                const Weight& a_weight, const Weight& b_weight,
+                                                const Tensor& A_log, const Tensor& dt_bias,
+                                                Tensor& g, Tensor& beta, cudaStream_t stream);
+
 } // namespace ninfer::ops::detail

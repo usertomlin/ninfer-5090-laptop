@@ -21,6 +21,11 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             if (t <= 4) { return launch_w8_simt_r8_c4; }
             if (t <= 16) { return launch_w8_simt_r8_c8; }
             return launch_w8_mma_r32_c128;
+        case 2560:
+            // 4B MTP input projection W8 [2560,5120].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
         case 6144:
             // Exact-T schedules own the DFlash2 decode interval. R32/C64 is the single bridge;
             // R64/C128 is the measured T=1024 prefill winner.
@@ -47,6 +52,12 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
         }
         break;
     case 6144:
+        if (n == 2048) {
+            // 2B MTP down projection W8 [2048,6144].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        }
         if (n == 5120) {
             if (t <= 48) { return launch_w8_small_t; }
             return launch_w8_mma_r64_c128;
@@ -68,6 +79,11 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
         break;
     case 4096:
         switch (n) {
+        case 2560:
+            // 4B MTP output projection and vision merger W8 [2560,4096].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
         case 2048:
             if (t <= 48) { return launch_w8_small_t; }
             if (t <= 56) { return launch_w8_simt_r8_c4; }
@@ -104,12 +120,44 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_w8_mma_r64_c128;
         }
         break;
+    case 2560:
+        // 4B MTP W8 projections sharing the 2560-wide input: attention QKV [10240,2560],
+        // q-gate [4096,2560] and the MLP gate-up [18432,2560].
+        switch (n) {
+        case 10240:
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        case 4096:
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        case 18432:
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        default:
+            break;
+        }
+        break;
     case 2048:
         switch (n) {
+        case 512:
+            // 2B MTP key/value projection W8 [512,2048].
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
         case 1024:
             if (t <= 4) { return launch_w8_simt_r8_c4; }
             if (t <= 16) { return launch_w8_simt_r8_c8; }
             return launch_w8_mma_r32_c128;
+        case 2048:
+            // 2B MTP attention output projection W8 [2048,2048].
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
+        case 5120:
+            // 2B MTP attention query/key/gate/value projection W8 [5120,2048].
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
         case 9216:
             if (t <= 13) { return launch_w8_simt_r8_c4; }
             if (t <= 128) { return launch_w8_mma_r32_c128; }
@@ -119,6 +167,14 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_w8_mma_r64_c128;
         default:
             break;
+        }
+        break;
+    case 9216:
+        if (n == 2560) {
+            // 4B MTP down projection W8 [2560,9216].
+            if (t <= 4) { return launch_w8_simt_r8_c4; }
+            if (t <= 16) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
         }
         break;
     case 4608:

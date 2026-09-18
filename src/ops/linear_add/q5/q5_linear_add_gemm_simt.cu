@@ -27,8 +27,12 @@ template <int Cols>
 void dispatch_shape(const Tensor& x, const Weight& w, Tensor& residual_out, cudaStream_t stream) {
     if (w.k == 4096) {
         launch_split2<Cols, 4, 4096>(x, w, residual_out, stream);
+    } else if (w.k == 2048) {
+        launch_split2<Cols, 2, 2048>(x, w, residual_out, stream);
     } else if (w.k == 6144) {
         launch_split2<Cols, 6, 6144>(x, w, residual_out, stream);
+    } else if (w.k == 9216) {
+        launch_split2<Cols, 9, 9216>(x, w, residual_out, stream);
     } else if (w.k == 12288) {
         launch_split2<Cols, 12, 12288>(x, w, residual_out, stream);
     } else if (w.k == 17408) {

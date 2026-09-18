@@ -38,9 +38,12 @@ void launch_q4_gemv_r4_w1_direct(const Tensor& x, const Weight& w, Tensor& out,
 void launch_q4_gemv_r1_w8_direct(const Tensor& x, const Weight& w, Tensor& out,
                                  cudaStream_t stream) {
     // The R1W8 schedule owns a static group count per row; select it from the
-    // activation width so both the K=5120 (Qwen3.6) and K=4096 (Qwen3.5-9B) forms
-    // read their exact weight row stride.
+    // activation width so the K=5120 (Qwen3.6), K=4096 (Qwen3.5-9B) and K=2048
+    // (Qwen3.5-2B) forms all read their exact weight row stride.
     switch (x.ne[0]) {
+    case 2048:
+        launch_gemv<Q4GemvR1W8DirectK32Schedule>(x, w, out, stream);
+        return;
     case 4096:
         launch_gemv<Q4GemvR1W8DirectK64Schedule>(x, w, out, stream);
         return;

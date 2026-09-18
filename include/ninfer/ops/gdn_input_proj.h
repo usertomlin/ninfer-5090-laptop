@@ -80,14 +80,18 @@ void gdn_input_proj(const Tensor& x, const Weight& query_key_value_z_weight, Ten
 
 /**
  * Returns the transient capacity required by the registered two-parent Q4/Q5 or single-parent W8
- * snapshot profile. `batch_size` is exact and the query covers every W in the inclusive width
- * interval. B=1 preserves the format-specific fused/composed resolver. B=2..8 uses aggregate
- * projection plus one BF16 [C,B*W] projected plane. The query throws for an unregistered row
- * profile or unsupported B/W domain.
+ * snapshot profile. `input_rows` selects the registered reduction width: 5120 splits into query,
+ * key, and 6144-wide value/z ranges over a [2048,2048,6144] conv output; 4096 and 2560 use
+ * [2048,2048,4096]; 2048 is the single-parent W8 form. `batch_size` is exact and the query covers
+ * every W in the inclusive width interval. B=1 preserves the format-specific fused/composed
+ * resolver, and the K=2560 geometry is materialized at every width because it owns no
+ * projection-epilogue kernel. B=2..8 uses aggregate projection plus one BF16 [C,B*W] projected
+ * plane. The query throws for an unregistered row profile or unsupported B/W domain.
  */
 [[nodiscard]] std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-    std::int32_t query_rows, std::int32_t key_rows, std::int32_t value_rows,
-    std::int32_t batch_size, std::int32_t min_width, std::int32_t max_width);
+    std::int32_t input_rows, std::int32_t query_rows, std::int32_t key_rows,
+    std::int32_t value_rows, std::int32_t batch_size, std::int32_t min_width,
+    std::int32_t max_width);
 
 /**
  * Returns the transient capacity for a registered [16384,5120] NVFP4 or row-scaled FP8 snapshot
@@ -110,11 +114,13 @@ void gdn_input_proj(const Tensor& x, const Weight& query_key_value_z_weight, Ten
  *   width-three history to snapshot_base_slots[b]+j. Z bypasses convolution.
  *
  * Logical shapes:
- *   The 27B registered form has x [5120,W,B], Q4 q/k weight [4096,5120], one Q5 value/z parent
- *   [12288,5120], conv_weight [10240,4], conv_states [10240,3,Slots], query/key [2048,W,B],
- *   value/z [6144,W,B], and I32 selectors [B]. B=1 accepts every positive W; B=2..8 accepts
- *   W=1..16. `valid_columns` is empty for a dense invocation or I32 [B] for a mixed-width batch.
- *   A mixed-width invocation has B>=1 and every valid extent lies in [1,W].
+ *   The registered two-parent forms are an input width K of 2560, 4096, or 5120: x [K,W,B],
+ *   Q4 q/k weight [4096,K], one Q5 value/z parent in [value,z] row order, conv_weight
+ *   [channels,4], conv_states [channels,3,Slots], query/key [2048,W,B], value and z
+ *   [v,W,B] each, and I32 selectors [B]. K=5120 uses v=6144; K=2560 and K=4096 use v=4096.
+ *   B=1 accepts every positive W; B=2..8 accepts W=1..16. `valid_columns` is empty for a dense
+ *   invocation or I32 [B] for a mixed-width batch. A mixed-width invocation has B>=1 and every
+ *   valid extent lies in [1,W].
  *
  * Numeric:
  *   The oracle exact-decodes packed weights and evaluates projection, convolution, SiLU, z, and
@@ -173,13 +179,16 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& query_key_value
 
 /**
  * Returns the transient capacity for the registered Q4/Q5 or W8 record-producing profile.
+ * `input_rows` selects the registered reduction width: 5120 and 4096 are two-parent Q4/Q5 forms
+ * and 2048 is the single-parent W8 form (4096 also carries the K=2560 two-parent geometry).
  * `batch_size` is exact, and the inclusive T interval must lie within ReplaySSM's B=1..8,
  * T=2..16 execution domain. These profiles require no transient storage because materialized
  * projection writes directly to caller-owned conv_record.
  */
 [[nodiscard]] std::size_t gdn_input_proj_conv_record_workspace_capacity_bytes(
-    std::int32_t query_rows, std::int32_t key_rows, std::int32_t value_rows,
-    std::int32_t batch_size, std::int32_t min_width, std::int32_t max_width);
+    std::int32_t input_rows, std::int32_t query_rows, std::int32_t key_rows,
+    std::int32_t value_rows, std::int32_t batch_size, std::int32_t min_width,
+    std::int32_t max_width);
 
 /**
  * Returns the transient capacity for a registered [16384,5120] NVFP4 or row-scaled FP8
@@ -207,8 +216,9 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& query_key_value
  * history, inputs, physical T/B, format and policy; records equal its newest history columns.
  * A private convolution intermediate need not be rounded to BF16 before use.
  *
- * The two-parent form registers Q4 q/k [4096,5120] and the Q5 value/z parent [12288,5120]. All
- * tensor operands, outputs, conv_record, source state, and live workspace must be disjoint.
+ * The two-parent form registers Q4 q/k [4096,K] and the Q5 value/z parent for K in {2560, 4096,
+ * 5120}: [12288,5120] at K=5120 and [8192,K] otherwise. All tensor operands, outputs,
+ * conv_record, source state, and live workspace must be disjoint.
  */
 void gdn_input_proj_conv_record(const Tensor& x, const Weight& qk_weight,
                                 const Weight& value_z_weight, const Tensor& conv_weight,

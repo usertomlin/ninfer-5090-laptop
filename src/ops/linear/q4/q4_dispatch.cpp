@@ -83,6 +83,25 @@ Q4Launch select_q4_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             break;
         }
         break;
+    case 1024:
+        // 2B/4B vision tower Q4 weights: attention qkv [3072,1024] and MLP fc1 [4096,1024].
+        if (t < 4 || t > 131072 || (t % 4) != 0) { break; }
+        switch (n) {
+        case 3072:
+            if (t <= 36) { return launch_q4_simt_r8_c4; }
+            if (t <= 320) { return launch_q4_mma_r64_c64; }
+            return launch_q4_mma_r64_c128;
+        case 4096:
+            if (t == 4) { return launch_q4_simt_r8_c4; }
+            if (t == 8) { return launch_q4_simt_r8_c8; }
+            if (t == 12) { return launch_q4_simt_r8_c4; }
+            if (t <= 24) { return launch_q4_simt_r8_c8; }
+            if (t <= 320) { return launch_q4_mma_r64_c64; }
+            return launch_q4_mma_r64_c128;
+        default:
+            break;
+        }
+        break;
     case 4096:
         switch (n) {
         case 24576:
@@ -95,6 +114,13 @@ Q4Launch select_q4_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_q4_mma_r64_c128;
         default:
             break;
+        }
+        break;
+    case 2560:
+        if (n == 131072) {
+            // Qwen3.5-4B MTP draft head Q4 [131072,2560].
+            if (t == 1) { return launch_q4_gemv_r4_w1_direct; }
+            return launch_q4_mma_r64_c128;
         }
         break;
     default:

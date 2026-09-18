@@ -31,11 +31,16 @@ struct RouteSpec {
     Q5LinearAddScheduleId schedule;
 };
 
-constexpr std::array<SupportSpec, 4> kSupports{{
+constexpr std::array<SupportSpec, 8> kSupports{{
     {5120, 6144, 6144},
     {5120, 17408, 17408},
     {4096, 4096, 4096},
     {4096, 12288, 12288},
+    {2560, 4096, 4096},
+    {2560, 9216, 9216},
+    // Qwen3.5-2B: attention/GDN output projection and MLP down projection.
+    {2048, 2048, 2048},
+    {2048, 6144, 6144},
 }};
 
 constexpr std::array<RouteSpec, 6> kK6144Routes{{

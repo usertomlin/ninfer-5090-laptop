@@ -45,6 +45,7 @@ linear_swiglu_workspace_capacity_bytes(QType qtype, std::int32_t gate_up_rows,
  * Logical shapes / supported domain:
  *   T may be any positive value. The registered profiles are:
  *   - Q4G64_F16S weight [34816,5120], x [5120,T], out [17408,T];
+ *   - Q4G64_F16S weight [18432,2560], x [2560,T], out [9216,T];
  *   - W8G32_F16S weight [12288,2048], x [2048,T], out [6144,T];
  *   - W8G32_F16S weight [34816,5120], x [5120,T], out [17408,T];
  *   - NVFP4 BlockScaleK16M128x4 weight [34816,5120], x [5120,T], out [17408,T];

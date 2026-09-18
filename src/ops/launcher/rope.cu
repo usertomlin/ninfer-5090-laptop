@@ -30,18 +30,18 @@ bool bf16x2_aligned(const Tensor& tensor) {
            tensor.nb[2] % static_cast<std::int64_t>(alignof(__nv_bfloat162)) == 0;
 }
 
-template <RopeKernelMode Mode, int QHeads, int KHeads>
+template <RopeKernelMode Mode, int QHeads, int KHeads, int HeadDim = kRopeHeadDim<Mode>>
 void launch_fixed_block(const Tensor& positions, Tensor* q, Tensor* k, int block,
                         cudaStream_t stream) {
     const int tokens = positions.ne[0];
-    rope_fixed_kernel<Mode, QHeads, KHeads><<<tokens, block, 0, stream>>>(
+    rope_fixed_kernel<Mode, QHeads, KHeads, HeadDim><<<tokens, block, 0, stream>>>(
         static_cast<const std::int32_t*>(positions.data),
         q == nullptr ? nullptr : static_cast<__nv_bfloat16*>(q->data),
         k == nullptr ? nullptr : static_cast<__nv_bfloat16*>(k->data), tokens, token_stride(q),
         token_stride(k));
 }
 
-template <RopeKernelMode Mode, int QHeads, int KHeads>
+template <RopeKernelMode Mode, int QHeads, int KHeads, int HeadDim = kRopeHeadDim<Mode>>
 void launch_fixed(const Tensor& positions, Tensor* q, Tensor* k, cudaStream_t stream) {
     const int tokens = positions.ne[0];
     int block        = kSmallBlock;
@@ -57,7 +57,7 @@ void launch_fixed(const Tensor& positions, Tensor* q, Tensor* k, cudaStream_t st
         if (block > head_warps) { block = head_warps; }
         if (block > 1024) { block = 1024; }
     }
-    launch_fixed_block<Mode, QHeads, KHeads>(positions, q, k, block, stream);
+    launch_fixed_block<Mode, QHeads, KHeads, HeadDim>(positions, q, k, block, stream);
 }
 
 template <int HeadsPerBlock, int QHeads, int KHeads>
@@ -111,16 +111,24 @@ bool launch_fixed_pair(const Tensor& positions, int rotary_dim, float theta, Ten
             }
         }
     }
-    if (axes == 2 && rotary_dim == 72 && theta == 10'000.0F && q.ne[1] == 16 && k.ne[1] == 16) {
-        launch_fixed<RopeKernelMode::Vision2D, 16, 16>(positions, &q, &k, stream);
-        return true;
+    // Vision packs both spatial axes into the rotary plane, so the fixed path accepts any width the
+    // kernel is instantiated for; unsupported widths fall through to the generic kernel.
+    if (axes == 2 && theta == 10'000.0F && q.ne[1] == 16 && k.ne[1] == 16) {
+        if (rotary_dim == 72) {
+            launch_fixed<RopeKernelMode::Vision2D, 16, 16, 72>(positions, &q, &k, stream);
+            return true;
+        }
+        if (rotary_dim == 64) {
+            launch_fixed<RopeKernelMode::Vision2D, 16, 16, 64>(positions, &q, &k, stream);
+            return true;
+        }
     }
     return false;
 }
 
-template <RopeKernelMode Mode, int Heads>
+template <RopeKernelMode Mode, int Heads, int HeadDim = kRopeHeadDim<Mode>>
 void launch_fixed_single(const Tensor& positions, Tensor& x, cudaStream_t stream) {
-    launch_fixed<Mode, Heads, 0>(positions, &x, nullptr, stream);
+    launch_fixed<Mode, Heads, 0, HeadDim>(positions, &x, nullptr, stream);
 }
 
 template <int Heads>
@@ -159,9 +167,15 @@ bool launch_fixed_single_dispatch(const Tensor& positions, int rotary_dim, float
             return true;
         }
     }
-    if (axes == 2 && rotary_dim == 72 && theta == 10'000.0F && x.ne[1] == 16) {
-        launch_fixed_single<RopeKernelMode::Vision2D, 16>(positions, x, stream);
-        return true;
+    if (axes == 2 && theta == 10'000.0F && x.ne[1] == 16) {
+        if (rotary_dim == 72) {
+            launch_fixed_single<RopeKernelMode::Vision2D, 16, 72>(positions, x, stream);
+            return true;
+        }
+        if (rotary_dim == 64) {
+            launch_fixed_single<RopeKernelMode::Vision2D, 16, 64>(positions, x, stream);
+            return true;
+        }
     }
     return false;
 }

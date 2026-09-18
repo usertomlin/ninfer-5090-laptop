@@ -49,9 +49,16 @@ int verify_output(std::string_view label, const GuardedBf16Tensor& output,
     return failures;
 }
 
+struct ProjectionShape {
+    std::int32_t hidden;
+    std::int32_t qrows;
+    std::int32_t kvrows;
+};
+
 int run_target_projection_case(DevicePackedWeight& parent, DevicePackedWeight* gate_value,
-                               int tokens, ops::LinearPolicy policy, bool replay = false) {
-    constexpr int hidden = 5120, qrows = 6144, kvrows = 1024;
+                               int tokens, ops::LinearPolicy policy, bool replay = false,
+                               ProjectionShape shape = {5120, 6144, 1024}) {
+    const std::int32_t hidden = shape.hidden, qrows = shape.qrows, kvrows = shape.kvrows;
     const bool dual      = gate_value != nullptr;
     auto activation      = make_bf16_activation(hidden, tokens, 101U + tokens);
     auto activation_bits = bf16_bits(activation);
@@ -112,11 +119,12 @@ int run_target_projection_case(DevicePackedWeight& parent, DevicePackedWeight* g
         failures += verify_output("attn k" + suffix, key, parent.host, qrows, kvrows, activation,
                                   hidden, tokens, criterion, sample_count);
         failures += verify_output("attn gate" + suffix, gate, dual ? gate_value->host : parent.host,
-                                  dual ? 0 : 7168, qrows, activation, hidden, tokens, criterion,
-                                  sample_count);
+                                  dual ? 0 : qrows + kvrows, qrows, activation, hidden, tokens,
+                                  criterion, sample_count);
         failures += verify_output("attn value" + suffix, value,
-                                  dual ? gate_value->host : parent.host, dual ? 6144 : 13312,
-                                  kvrows, activation, hidden, tokens, criterion, sample_count);
+                                  dual ? gate_value->host : parent.host,
+                                  dual ? qrows : 2 * qrows + kvrows, kvrows, activation, hidden,
+                                  tokens, criterion, sample_count);
         failures += verify_preserved("attn input" + suffix, input, activation_bits);
         failures += scratch.verify_guards(suffix);
         if (workspace.used() != 0 || workspace.peak_used() > capacity) {
@@ -147,6 +155,56 @@ int run_q4_q5() {
     for (int t : {1, 8, 12, 13, 16, 32, 63, 64, 65, 96, 104, 105, 127, 128, 129, 192, 193})
         failures +=
             run_target_projection_case(query_key, &gate_value, t, ops::LinearPolicy::A16Only, true);
+    return failures;
+}
+
+// Qwen3.5-2B owns K=2048 with 8 query heads and 2 KV heads of width 256, so the
+// parent seam is 2560 rows instead of the 9B's 5120. K is exactly two 1024-value
+// slabs, which separates it from the 4B runtime-tail route.
+int run_q4_q5_2b() {
+    constexpr std::int32_t kHidden = 2048;
+    constexpr std::int32_t kParent = 2560;
+    constexpr ProjectionShape kShape{2048, 2048, 512};
+    DevicePackedWeight query_key(
+        quantized_weight::make_patterned_weight(QType::Q4G64_F16S, kParent, kHidden, 127U));
+    DevicePackedWeight gate_value(
+        quantized_weight::make_patterned_weight(QType::Q5G64_F16S, kParent, kHidden, 131U));
+
+    int failures = 0;
+    for (int t = 1; t <= 128; ++t)
+        failures += run_target_projection_case(query_key, &gate_value, t,
+                                               ops::LinearPolicy::A16Only, false, kShape);
+    for (int t : {129, 144, 145, 160, 161, 192, 193, 256, 257, 1024})
+        failures += run_target_projection_case(query_key, &gate_value, t,
+                                               ops::LinearPolicy::A16Only, false, kShape);
+    for (int t : {1, 8, 12, 13, 16, 32, 63, 64, 65, 96, 104, 105, 127, 128, 129, 192, 193})
+        failures += run_target_projection_case(query_key, &gate_value, t,
+                                               ops::LinearPolicy::A16Only, true, kShape);
+    return failures;
+}
+
+// Qwen3.5-4B owns K=2560 and query rows of 4096 under the same parent seam as the
+// 9B (5120 parent rows). Its K is not a whole number of 1024-value slabs, so the
+// small-column route runs the runtime-tail SIMT kernels at every T.
+int run_q4_q5_4b() {
+    constexpr std::int32_t kHidden = 2560;
+    constexpr std::int32_t kParent = 5120;
+    constexpr ProjectionShape kShape{2560, 4096, 1024};
+    DevicePackedWeight query_key(
+        quantized_weight::make_patterned_weight(QType::Q4G64_F16S, kParent, kHidden, 109U));
+    DevicePackedWeight gate_value(
+        quantized_weight::make_patterned_weight(QType::Q5G64_F16S, kParent, kHidden, 113U));
+
+    int failures = 0;
+    for (int t = 1; t <= 128; ++t)
+        failures += run_target_projection_case(query_key, &gate_value, t,
+                                               ops::LinearPolicy::A16Only, false, kShape);
+    for (int t : {129, 144, 145, 160, 161, 192, 193, 256, 257, 1024})
+        failures += run_target_projection_case(query_key, &gate_value, t,
+                                               ops::LinearPolicy::A16Only, false, kShape);
+    for (int t : {1, 8, 12, 13, 16, 32, 63, 64, 65, 96, 104, 105, 127, 128, 129, 192, 193})
+        failures += run_target_projection_case(query_key, &gate_value, t,
+                                               ops::LinearPolicy::A16Only, true, kShape);
     return failures;
 }
 
@@ -536,6 +594,8 @@ int main(int argc, char** argv) {
     int failures = 0;
     if (!dflash2_only) {
         failures += run_q4_q5();
+        failures += run_q4_q5_2b();
+        failures += run_q4_q5_4b();
         failures += run_bf16_target();
         failures += run_nvfp4_target();
         failures += run_fp8_target();

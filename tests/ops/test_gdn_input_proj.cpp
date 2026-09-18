@@ -36,12 +36,12 @@ int verify_output_range(std::string_view label, const GuardedBf16Tensor& output,
 }
 
 int run_q4_q5_case(DevicePackedWeight& query_key, DevicePackedWeight& value_z_weight,
-                   std::int32_t tokens) {
-    constexpr std::int32_t kHidden      = 5120;
-    constexpr std::int32_t kQkRows      = 4096;
-    constexpr std::int32_t kValueRows   = 6144;
-    constexpr std::int32_t kZRows       = 6144;
-    constexpr std::int32_t kRows        = kQkRows + kValueRows;
+                   std::int32_t hidden, std::int32_t value_rows, std::int32_t tokens) {
+    const std::int32_t kHidden           = hidden;
+    constexpr std::int32_t kQkRows       = 4096;
+    const std::int32_t kValueRows        = value_rows;
+    const std::int32_t kZRows            = value_rows;
+    const std::int32_t kRows             = kQkRows + value_rows;
     const std::vector<float> activation = make_bf16_activation(kHidden, tokens, 401U + tokens);
     const std::vector<std::uint16_t> activation_bits = bf16_bits(activation);
     DeviceBuffer device_activation                   = to_device(activation_bits);
@@ -53,7 +53,8 @@ int run_q4_q5_case(DevicePackedWeight& query_key, DevicePackedWeight& value_z_we
     ops::gdn_input_proj(x, query_key.view(), value_z_weight.view(), output, z_output, nullptr);
     cuda_synchronize();
 
-    const std::string suffix = " Q4/Q5 A16 T=" + std::to_string(tokens);
+    const std::string suffix =
+        " Q4/Q5 A16 K=" + std::to_string(kHidden) + " T=" + std::to_string(tokens);
     int failures             = qkv.verify_guards("gdn qkv" + suffix);
     failures += z.verify_guards("gdn z" + suffix);
     failures += qkv.verify_fully_written("gdn qkv" + suffix);
@@ -71,14 +72,30 @@ int run_q4_q5_case(DevicePackedWeight& query_key, DevicePackedWeight& value_z_we
 }
 
 int run_q4_q5() {
-    constexpr std::int32_t kHidden = 5120;
+    constexpr std::int32_t kHidden    = 5120;
+    constexpr std::int32_t kValueRows = 6144;
     DevicePackedWeight query_key(
         quantized_weight::make_patterned_weight(QType::Q4G64_F16S, 4096, kHidden, 409U));
     DevicePackedWeight value_z_weight(
         quantized_weight::make_patterned_weight(QType::Q5G64_F16S, 12288, kHidden, 419U));
     int failures = 0;
     for (const std::int32_t tokens : {1, 2, 16, 17}) {
-        failures += run_q4_q5_case(query_key, value_z_weight, tokens);
+        failures += run_q4_q5_case(query_key, value_z_weight, kHidden, kValueRows, tokens);
+    }
+    return failures;
+}
+
+int run_q4_q5_4b() {
+    constexpr std::int32_t kHidden    = 2560;
+    constexpr std::int32_t kValueRows = 4096;
+    DevicePackedWeight query_key(
+        quantized_weight::make_patterned_weight(QType::Q4G64_F16S, 4096, kHidden, 431U));
+    DevicePackedWeight value_z_weight(
+        quantized_weight::make_patterned_weight(QType::Q5G64_F16S, 8192, kHidden, 433U));
+    int failures = 0;
+    // T=1 and T=2 stay on the SIMT Small-T route; T=16 and T=17 cross into rowsplit MMA.
+    for (const std::int32_t tokens : {1, 2, 16, 17}) {
+        failures += run_q4_q5_case(query_key, value_z_weight, kHidden, kValueRows, tokens);
     }
     return failures;
 }
@@ -325,6 +342,7 @@ int main() {
 
     int failures = 0;
     failures += run_q4_q5();
+    failures += run_q4_q5_4b();
     failures += run_w8();
     failures += run_nvfp4();
     failures += run_fp8();

@@ -27,6 +27,7 @@ struct Geometry {
 constexpr Geometry kQwen27{"qwen3_6_27b", 5120, 48, false};
 constexpr Geometry kQwen38Parent{"qwen3_8_27b_parent", 5120, 48, true};
 constexpr Geometry kQwen35{"qwen3_6_35b_a3b", 2048, 32, true};
+constexpr Geometry kQwen4{"qwen3_5_4b", 2560, 32, false};
 
 constexpr ReductionCriterion kGdnProjectionFp32{/*relative_l2=*/1.4e-6,
                                                 /*gross_absolute=*/5.0e-7,
@@ -482,6 +483,7 @@ int main() {
     int failures = 0;
     failures += verify_workspace_capacity_contract(kQwen27, {1, 8, 1024, 2048, 4096, 4097});
     failures += verify_workspace_capacity_contract(kQwen35, {1, 127, 1024, 2048, 4096, 4097});
+    failures += verify_workspace_capacity_contract(kQwen4, {1, 1024, 2048, 4096, 4097});
 
     // Every registered 27B projection route, including predicated and full token tiles.
     for (const std::int32_t tokens : {1, 8, 9, 1024, 1025, 2049, 4097}) {
@@ -495,6 +497,12 @@ int main() {
     for (const std::int32_t tokens : {1, 127, 128, 1024, 1025, 2049, 4097}) {
         failures += run_projection_case(kQwen35, tokens,
                                         0x2000u + static_cast<std::uint32_t>(tokens), execution);
+    }
+    // The 4B profile shares the 32-head/BN64 cooperative lanes, with split-8 its most
+    // aggressive exact-K schedule; cover every registered route boundary.
+    for (const std::int32_t tokens : {1, 8, 64, 1024, 1025, 2049, 4097}) {
+        failures += run_projection_case(kQwen4, tokens,
+                                        0x9000u + static_cast<std::uint32_t>(tokens), execution);
     }
 
     // Direct complete norm/control oracles across variable widths and the existing 35B profile.
@@ -514,6 +522,11 @@ int main() {
     failures += run_norm_projection_case(kQwen35, 16, 0x4010u, norm_execution);
     failures += run_norm_projection_case(kQwen35, 17, 0x4011u, norm_execution);
     failures += run_norm_projection_case(kQwen35, 64, 0x4040u, norm_execution);
+    // The 4B norm/control composition reuses the composed route at every boundary.
+    failures += run_norm_projection_case(kQwen4, 1, 0x4101u, norm_execution);
+    failures += run_norm_projection_case(kQwen4, 64, 0x4140u, norm_execution);
+    failures += run_norm_projection_case(kQwen4, 1025, 0x4401u, norm_execution);
+    failures += run_norm_projection_case(kQwen4, 4097, 0x5001u, norm_execution);
 
     // Requalify the retained BF16-staging profile at every prefill reduction boundary.
     for (int tokens : {1024, 1025, 2048, 2049, 4097})

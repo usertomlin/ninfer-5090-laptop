@@ -55,21 +55,19 @@ void launch_pair(bool full, const Tensor& x, RowSplitGroupedMmaJob first,
     CUDA_CHECK(cudaGetLastError());
 }
 
-template <class Schedule>
+template <class Geometry, class Schedule>
 void launch_slice(const Tensor& x, const Weight& query_key_weight, const Weight& gate_value_weight,
                   Tensor& q, Tensor& gate, Tensor& k, Tensor& v, cudaStream_t stream) {
     const bool full = (x.ne[1] % Schedule::BN) == 0;
-    const std::int32_t query_rows = (x.ne[0] == 4096) ? 4096 : 6144;
-    constexpr std::int32_t kv_rows = 1024;
     launch_pair<Schedule, RowSplitGroupedMmaCodec::Q4>(
-        full, x, make_job(query_key_weight, 0, query_rows, q),
-        make_job(query_key_weight, query_rows, kv_rows, k), stream);
+        full, x, make_job(query_key_weight, 0, Geometry::kQueryRows, q),
+        make_job(query_key_weight, Geometry::kQueryRows, Geometry::kKvRows, k), stream);
     launch_pair<Schedule, RowSplitGroupedMmaCodec::Q5>(
-        full, x, make_job(gate_value_weight, 0, query_rows, gate),
-        make_job(gate_value_weight, query_rows, kv_rows, v), stream);
+        full, x, make_job(gate_value_weight, 0, Geometry::kQueryRows, gate),
+        make_job(gate_value_weight, Geometry::kQueryRows, Geometry::kKvRows, v), stream);
 }
 
-template <class Schedule>
+template <class Geometry, class Schedule>
 void launch(const Tensor& x, const Weight& query_key_weight, const Weight& gate_value_weight,
             Tensor& q, Tensor& gate, Tensor& k, Tensor& v, cudaStream_t stream) {
     constexpr std::int32_t kSliceCols = Schedule::BN;
@@ -79,8 +77,8 @@ void launch(const Tensor& x, const Weight& query_key_weight, const Weight& gate_
         Tensor gate_slice    = gate.slice(1, offset, count);
         Tensor k_slice       = k.slice(1, offset, count);
         Tensor v_slice       = v.slice(1, offset, count);
-        launch_slice<Schedule>(x_slice, query_key_weight, gate_value_weight, q_slice, gate_slice,
-                               k_slice, v_slice, stream);
+        launch_slice<Geometry, Schedule>(x_slice, query_key_weight, gate_value_weight, q_slice,
+                                         gate_slice, k_slice, v_slice, stream);
     });
 }
 
@@ -95,7 +93,25 @@ struct AttnInputMmaGeometry {
 
 using AttnInputMmaGeometry27 = AttnInputMmaGeometry<5120, 7168, 6144, 1024>;
 using AttnInputMmaGeometry9  = AttnInputMmaGeometry<4096, 5120, 4096, 1024>;
+using AttnInputMmaGeometry4  = AttnInputMmaGeometry<2560, 5120, 4096, 1024>;
+// Qwen3.5-2B: 8 query heads and 2 KV heads of width 256 over hidden=2048.
+using AttnInputMmaGeometry2  = AttnInputMmaGeometry<2048, 2560, 2048, 512>;
 using MmaR32C64S4            = GemmCfg<32, 64, 64, 16, 16, 4, 1, false, true, true>;
+
+template <class Fn>
+void dispatch_input_geometry(std::int32_t input_rows, Fn&& fn) {
+    switch (input_rows) {
+    case AttnInputMmaGeometry2::kInputRows:
+        return fn.template operator()<AttnInputMmaGeometry2>();
+    case AttnInputMmaGeometry4::kInputRows:
+        return fn.template operator()<AttnInputMmaGeometry4>();
+    case AttnInputMmaGeometry9::kInputRows:
+        return fn.template operator()<AttnInputMmaGeometry9>();
+    case AttnInputMmaGeometry27::kInputRows:
+        return fn.template operator()<AttnInputMmaGeometry27>();
+    }
+    throw std::invalid_argument("Q4/Q5 attention input grouped MMA: unsupported input width");
+}
 
 template <class Geometry, class S, bool Full>
 void mixed_slice(const Tensor& x, const Weight& w0, const Weight& w1, Tensor& q, Tensor& g,
@@ -130,32 +146,36 @@ void q4_q5_attn_input_grouped_mma_r32_c64_s4_launch(const Tensor& x, const Weigh
                                                     const Weight& gate_value_weight, Tensor& q,
                                                     Tensor& gate, Tensor& k, Tensor& v,
                                                     cudaStream_t stream) {
-    launch<MmaR32C64S4>(x, query_key_weight, gate_value_weight, q, gate, k, v, stream);
+    dispatch_input_geometry(x.ne[0], [&]<class Geometry>() {
+        launch<Geometry, MmaR32C64S4>(x, query_key_weight, gate_value_weight, q, gate, k, v,
+                                      stream);
+    });
 }
 
 void q4_q5_attn_input_mixed_r32_c64_s3_launch(const Tensor& x, const Weight& w0, const Weight& w1,
                                               Tensor& q, Tensor& g, Tensor& k, Tensor& v,
                                               cudaStream_t stream) {
     using Schedule = GemmCfg<32, 64, 64, 16, 16, 3, 3, false, true, true>;
-    if (x.ne[0] == AttnInputMmaGeometry9::kInputRows)
-        launch_mixed<AttnInputMmaGeometry9, Schedule>(x, w0, w1, q, g, k, v, stream);
-    else
-        launch_mixed<AttnInputMmaGeometry27, Schedule>(x, w0, w1, q, g, k, v, stream);
+    dispatch_input_geometry(x.ne[0], [&]<class Geometry>() {
+        launch_mixed<Geometry, Schedule>(x, w0, w1, q, g, k, v, stream);
+    });
 }
 
 void q4_q5_attn_input_pair_r32_c64_s3_launch(const Tensor& x, const Weight& w0, const Weight& w1,
                                              Tensor& q, Tensor& g, Tensor& k, Tensor& v,
                                              cudaStream_t stream) {
-    launch<GemmCfg<32, 64, 64, 32, 16, 3, 2, false, true, true>>(x, w0, w1, q, g, k, v, stream);
+    using Schedule = GemmCfg<32, 64, 64, 32, 16, 3, 2, false, true, true>;
+    dispatch_input_geometry(x.ne[0], [&]<class Geometry>() {
+        launch<Geometry, Schedule>(x, w0, w1, q, g, k, v, stream);
+    });
 }
 
 void q4_q5_attn_input_mixed_r64_c128_s2_launch(const Tensor& x, const Weight& w0, const Weight& w1,
                                                Tensor& q, Tensor& g, Tensor& k, Tensor& v,
                                                cudaStream_t stream) {
     using Schedule = GemmCfg<64, 128, 64, 64, 16, 2, 2, false, true, true>;
-    if (x.ne[0] == AttnInputMmaGeometry9::kInputRows)
-        launch_mixed<AttnInputMmaGeometry9, Schedule>(x, w0, w1, q, g, k, v, stream);
-    else
-        launch_mixed<AttnInputMmaGeometry27, Schedule>(x, w0, w1, q, g, k, v, stream);
+    dispatch_input_geometry(x.ne[0], [&]<class Geometry>() {
+        launch_mixed<Geometry, Schedule>(x, w0, w1, q, g, k, v, stream);
+    });
 }
 } // namespace ninfer::ops::detail

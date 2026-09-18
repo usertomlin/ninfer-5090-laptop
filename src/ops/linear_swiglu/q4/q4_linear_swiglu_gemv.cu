@@ -17,16 +17,13 @@
 namespace ninfer::ops::detail {
 namespace {
 
-constexpr int kGroupK            = 64;
-constexpr int kBytesPerGroup     = 32;
-constexpr int kVecBytes          = 16;
-constexpr int kGroupsPerWarpTile = 16;
-constexpr int kVecsPerWarpTile   = kGroupsPerWarpTile * kBytesPerGroup / kVecBytes;
-constexpr int kWarpsPerBlock     = 4;
-constexpr int kBlockThreads      = kWarpsPerBlock * 32;
-constexpr int kPairsPerBlock     = kWarpsPerBlock;
+constexpr int kGroupK        = 64;
+constexpr int kBytesPerGroup = 32;
+constexpr int kVecBytes      = 16;
+constexpr int kWarpsPerBlock = 4;
+constexpr int kBlockThreads  = kWarpsPerBlock * 32;
+constexpr int kPairsPerBlock = kWarpsPerBlock;
 static_assert(kBytesPerGroup == 2 * kVecBytes);
-static_assert(kVecsPerWarpTile == 32);
 
 template <int kIntermediate, int kK>
 struct Q4SwiGluSmallTGeometry {
@@ -88,19 +85,30 @@ constexpr auto make_small_t_launchers(std::index_sequence<Offsets...>) {
 
 constexpr auto kSmallTLaunchers27 = make_small_t_launchers<17408, 5120>(std::make_index_sequence<31>{});
 constexpr auto kSmallTLaunchers9  = make_small_t_launchers<12288, 4096>(std::make_index_sequence<31>{});
-__device__ __forceinline__ void q4_issue_pair_tile(uint4 (*__restrict__ s_code)[kVecsPerWarpTile],
+constexpr auto kSmallTLaunchers4  = make_small_t_launchers<9216, 2560>(std::make_index_sequence<31>{});
+constexpr auto kSmallTLaunchers2  = make_small_t_launchers<6144, 2048>(std::make_index_sequence<31>{});
+
+// One warp tile covers kTileGroups 64-wide groups: 16 (32 code vectors and 2 scale vectors per
+// lane set) for the 5120/4096-wide rows, 8 (16 code vectors, 1 scale vector) for the 4B's
+// 2560-wide rows whose 40 groups do not divide into 16.
+template <int kTileGroups>
+__device__ __forceinline__ void q4_issue_pair_tile(uint4 (*__restrict__ s_code)[kTileGroups * 2],
                                                    uint4 (*__restrict__ s_scale)[2],
                                                    const std::uint8_t* __restrict__ gate_code_row,
                                                    const std::uint8_t* __restrict__ gate_scale_row,
                                                    const std::uint8_t* __restrict__ up_code_row,
                                                    const std::uint8_t* __restrict__ up_scale_row,
                                                    int tile, int lane) {
-    const int g0 = tile * kGroupsPerWarpTile;
-    pipe_copy<16>(&s_code[0][lane],
-                  reinterpret_cast<const uint4*>(gate_code_row + g0 * kBytesPerGroup) + lane);
-    pipe_copy<16>(&s_code[1][lane],
-                  reinterpret_cast<const uint4*>(up_code_row + g0 * kBytesPerGroup) + lane);
-    if (lane < 2) {
+    constexpr int kVecs      = kTileGroups * 2;
+    constexpr int kScaleVecs = kTileGroups / 8;
+    const int g0 = tile * kTileGroups;
+    if (lane < kVecs) {
+        pipe_copy<16>(&s_code[0][lane],
+                      reinterpret_cast<const uint4*>(gate_code_row + g0 * kBytesPerGroup) + lane);
+        pipe_copy<16>(&s_code[1][lane],
+                      reinterpret_cast<const uint4*>(up_code_row + g0 * kBytesPerGroup) + lane);
+    }
+    if (lane < kScaleVecs) {
         pipe_copy<16>(&s_scale[0][lane],
                       reinterpret_cast<const uint4*>(gate_scale_row + g0 * 2) + lane);
         pipe_copy<16>(&s_scale[1][lane],
@@ -109,17 +117,18 @@ __device__ __forceinline__ void q4_issue_pair_tile(uint4 (*__restrict__ s_code)[
     pipe_commit();
 }
 
-template <int kN, int kK>
+template <int kN, int kK, int kTileGroups = 16>
 __global__ void q4_linear_swiglu_gemv_pair_kernel(const __nv_bfloat16* __restrict__ x,
                                                   const std::uint8_t* __restrict__ codes,
                                                   const std::uint8_t* __restrict__ scales,
                                                   __nv_bfloat16* __restrict__ out) {
-    constexpr int kIntermediate  = kN / 2;
-    constexpr int kGroups        = kK / kGroupK;
-    constexpr int kXVecs         = kK / 8; // x as uint4 (8 bf16 each)
-    constexpr int kTiles         = kGroups / kGroupsPerWarpTile;
+    constexpr int kIntermediate    = kN / 2;
+    constexpr int kGroups          = kK / kGroupK;
+    constexpr int kXVecs           = kK / 8; // x as uint4 (8 bf16 each)
+    constexpr int kTiles           = kGroups / kTileGroups;
+    constexpr int kVecsPerWarpTile = kTileGroups * 2;
     static_assert(kIntermediate % kPairsPerBlock == 0);
-    static_assert(kGroups % kGroupsPerWarpTile == 0);
+    static_assert(kGroups % kTileGroups == 0);
 
     constexpr int kStages   = 3;
     constexpr int kPrefetch = kStages - 1;
@@ -152,8 +161,8 @@ __global__ void q4_linear_swiglu_gemv_pair_kernel(const __nv_bfloat16* __restric
 #pragma unroll
     for (int p = 0; p < kPrefetch; ++p) {
         if (p < kTiles) {
-            q4_issue_pair_tile(code_tile[warp][p], scale_tile[warp][p], gate_code_row,
-                               gate_scale_row, up_code_row, up_scale_row, p, lane);
+            q4_issue_pair_tile<kTileGroups>(code_tile[warp][p], scale_tile[warp][p], gate_code_row,
+                                            gate_scale_row, up_code_row, up_scale_row, p, lane);
         } else {
             pipe_commit();
         }
@@ -164,8 +173,9 @@ __global__ void q4_linear_swiglu_gemv_pair_kernel(const __nv_bfloat16* __restric
         const int fetch = tile + kPrefetch;
         if (fetch < kTiles) {
             const int buf = fetch % kStages;
-            q4_issue_pair_tile(code_tile[warp][buf], scale_tile[warp][buf], gate_code_row,
-                               gate_scale_row, up_code_row, up_scale_row, fetch, lane);
+            q4_issue_pair_tile<kTileGroups>(code_tile[warp][buf], scale_tile[warp][buf],
+                                            gate_code_row, gate_scale_row, up_code_row,
+                                            up_scale_row, fetch, lane);
         } else {
             pipe_commit();
         }
@@ -178,7 +188,7 @@ __global__ void q4_linear_swiglu_gemv_pair_kernel(const __nv_bfloat16* __restric
         const auto* gate_scales = reinterpret_cast<const std::uint16_t*>(scale_tile[warp][buf][0]);
         const auto* up_scales   = reinterpret_cast<const std::uint16_t*>(scale_tile[warp][buf][1]);
 #pragma unroll
-        for (int tile_group = 0; tile_group < kGroupsPerWarpTile; ++tile_group) {
+        for (int tile_group = 0; tile_group < kTileGroups; ++tile_group) {
             const float gate_scale =
                 __half2float(__ushort_as_half(static_cast<std::uint16_t>(gate_scales[tile_group])));
             const float up_scale =
@@ -191,7 +201,7 @@ __global__ void q4_linear_swiglu_gemv_pair_kernel(const __nv_bfloat16* __restric
             const int up_packed = static_cast<int>(up_codes[tile_group * kBytesPerGroup + lane]);
             const int up_q0     = sign_extend<4>(up_packed & 0x0f);
             const int up_q1     = sign_extend<4>(up_packed >> 4);
-            const int k0        = (tile * kGroupsPerWarpTile + tile_group) * kGroupK + lane * 2;
+            const int k0        = (tile * kTileGroups + tile_group) * kGroupK + lane * 2;
             const float2 xv     = __bfloat1622float2(x2[k0 >> 1]);
             gate_acc            = fmaf(static_cast<float>(gate_q0) * gate_scale, xv.x, gate_acc);
             gate_acc            = fmaf(static_cast<float>(gate_q1) * gate_scale, xv.y, gate_acc);
@@ -206,11 +216,11 @@ __global__ void q4_linear_swiglu_gemv_pair_kernel(const __nv_bfloat16* __restric
     if (lane == 0) { out[out_row] = __float2bfloat16(silu(gate_acc) * up_acc); }
 }
 
-template <int kN, int kK>
+template <int kN, int kK, int kTileGroups = 16>
 void launch_gemv(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
     constexpr int kIntermediate = kN / 2;
     const int grid = kIntermediate / kPairsPerBlock;
-    q4_linear_swiglu_gemv_pair_kernel<kN, kK><<<grid, kBlockThreads, 0, stream>>>(
+    q4_linear_swiglu_gemv_pair_kernel<kN, kK, kTileGroups><<<grid, kBlockThreads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
         static_cast<const std::uint8_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data));
     CUDA_CHECK(cudaGetLastError());
@@ -233,6 +243,18 @@ void q4_linear_swiglu_gemv_pair_launch(const Tensor& x, const Weight& w, Tensor&
         }
         launch_gemv<24576, 4096>(x, w, out, stream);
         return;
+    case 18432:
+        if (w.k != 2560 || w.padded_shape[1] != 2560) {
+            throw std::invalid_argument("q4 linear_swiglu GEMV requires weight [18432,2560]");
+        }
+        launch_gemv<18432, 2560, 8>(x, w, out, stream);
+        return;
+    case 12288:
+        if (w.k != 2048 || w.padded_shape[1] != 2048) {
+            throw std::invalid_argument("q4 linear_swiglu GEMV requires weight [12288,2048]");
+        }
+        launch_gemv<12288, 2048>(x, w, out, stream);
+        return;
     default:
         throw std::invalid_argument("q4 linear_swiglu GEMV: unsupported weight shape");
     }
@@ -250,6 +272,14 @@ void q4_linear_swiglu_small_t_tiled_launch(const Tensor& x, const Weight& w, Ten
     }
     if (w.n == 24576) {
         kSmallTLaunchers9[idx](x, w, out, stream);
+        return;
+    }
+    if (w.n == 18432) {
+        kSmallTLaunchers4[idx](x, w, out, stream);
+        return;
+    }
+    if (w.n == 12288) {
+        kSmallTLaunchers2[idx](x, w, out, stream);
         return;
     }
     throw std::invalid_argument("q4 linear_swiglu small_t: unsupported weight shape");

@@ -31,14 +31,32 @@ using GdnInputGeometry27 =
     GdnInputGeometry<4096, 6144, 6144, 5120, 5>;
 using GdnInputGeometry9 =
     GdnInputGeometry<4096, 4096, 4096, 4096, 4>;
+using GdnInputGeometry4 =
+    GdnInputGeometry<4096, 4096, 4096, 2560, 2>;
+using GdnInputGeometry2 =
+    GdnInputGeometry<4096, 2048, 2048, 2048, 2>;
+
+// The GEMV, split4, and split4-PDL kernels own their reduction statically: their
+// compile-time slab count must cover K = kFullSlabs * 1024 exactly. Qwen3.5-4B's
+// K=2560 is not a whole number of 1024-value slabs, so every column count of that
+// geometry uses the runtime-tail SIMT kernels, matching the plain Q5 linear route
+// for odd K.
+template <class Geometry>
+inline constexpr bool kExactSlabCoverage = Geometry::kHidden == Geometry::kFullSlabs * 1024;
 
 using Q4GdnSimtR8C4Schedule = Q4RowSplitSimtGemmSchedule<8, 4, 16, 2, Cache::ca, 1>;
 using Q4GdnSimtR8C8Schedule = Q4RowSplitSimtGemmSchedule<8, 8, 16, 2, Cache::ca, 1>;
 
 template <class Geometry>
 void launch_q4_gemv(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    using Schedule = std::conditional_t<Geometry::kHidden == 4096,
-                                        Q4GemvR1W8DirectK64Schedule, Q4GemvR1W8DirectSchedule>;
+    // The R1W8 schedule owns a static group count per row that must match K.
+    using Schedule = std::conditional_t<
+        Geometry::kHidden == 5120, Q4GemvR1W8DirectSchedule,
+        std::conditional_t<Geometry::kHidden == 4096, Q4GemvR1W8DirectK64Schedule,
+                           Q4GemvR1W8DirectK32Schedule>>;
+    static_assert(Geometry::kHidden == 5120 || Geometry::kHidden == 4096 ||
+                      Geometry::kHidden == 2048,
+                  "GDN Q4 GEMV geometry must own a static per-row group count");
     constexpr std::int32_t kQkRows = Geometry::kQkRows;
     constexpr std::int32_t kHidden = Geometry::kHidden;
     const dim3 grid(static_cast<unsigned>(div_up(kQkRows, Schedule::kRowsPerCta)), 1u, 1u);
@@ -81,9 +99,11 @@ void launch_q4_simt_route(const Tensor& x, const Weight& weight, Tensor& out, cu
 
 template <class Geometry>
 void launch_q4(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    if (x.ne[1] == 1) {
-        launch_q4_gemv<Geometry>(x, weight, out, stream);
-        return;
+    if constexpr (kExactSlabCoverage<Geometry>) {
+        if (x.ne[1] == 1) {
+            launch_q4_gemv<Geometry>(x, weight, out, stream);
+            return;
+        }
     }
     if (x.ne[1] <= 4) {
         launch_q4_simt_route<Geometry, Q4GdnSimtR8C4Schedule>(x, weight, out, stream);
@@ -188,13 +208,15 @@ void launch_q5_simt_r8_c8(const Tensor& x, const Weight& weight, Tensor& value, 
 template <class Geometry>
 void launch_q5(const Tensor& x, const Weight& weight, Tensor& value, Tensor& z,
                cudaStream_t stream) {
-    if (x.ne[1] == 1) {
-        launch_q5_gemv<Geometry>(x, weight, value, z, stream);
-        return;
-    }
-    if (x.ne[1] <= 6) {
-        launch_q5_split4_exact<Geometry>(x, weight, value, z, stream);
-        return;
+    if constexpr (kExactSlabCoverage<Geometry>) {
+        if (x.ne[1] == 1) {
+            launch_q5_gemv<Geometry>(x, weight, value, z, stream);
+            return;
+        }
+        if (x.ne[1] <= 6) {
+            launch_q5_split4_exact<Geometry>(x, weight, value, z, stream);
+            return;
+        }
     }
     if (x.ne[1] <= 16) {
         launch_q5_simt_r8_c8<Geometry>(x, weight, value, z, stream);
@@ -240,9 +262,11 @@ void launch_t4_pdl(const Tensor& x, const Weight& qk_weight, const Weight& value
 template <class Geometry>
 void launch_geometry(const Tensor& x, const Weight& qk_weight, const Weight& value_z_weight,
                      Tensor& qk, Tensor& value, Tensor& z, cudaStream_t stream) {
-    if (x.ne[1] == 4) {
-        launch_t4_pdl<Geometry>(x, qk_weight, value_z_weight, qk, value, z, stream);
-        return;
+    if constexpr (kExactSlabCoverage<Geometry>) {
+        if (x.ne[1] == 4) {
+            launch_t4_pdl<Geometry>(x, qk_weight, value_z_weight, qk, value, z, stream);
+            return;
+        }
     }
     launch_q4<Geometry>(x, qk_weight, qk, stream);
     launch_q5<Geometry>(x, value_z_weight, value, z, stream);
@@ -259,6 +283,12 @@ void q4_q5_gdn_input_independent_launch(const Tensor& x, const Weight& qk_weight
         return;
     case 4096:
         launch_geometry<GdnInputGeometry9>(x, qk_weight, value_z_weight, qk, value, z, stream);
+        return;
+    case 2560:
+        launch_geometry<GdnInputGeometry4>(x, qk_weight, value_z_weight, qk, value, z, stream);
+        return;
+    case 2048:
+        launch_geometry<GdnInputGeometry2>(x, qk_weight, value_z_weight, qk, value, z, stream);
         return;
     default:
         throw std::invalid_argument("GDN Q4/Q5 independent launch: unsupported input width");

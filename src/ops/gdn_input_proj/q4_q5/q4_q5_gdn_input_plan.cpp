@@ -43,7 +43,14 @@ bool supported_shape(const Q4Q5GdnInputProblem& problem) noexcept {
             problem.z_rows == 6144 && problem.padded_k == 5120) ||
            (problem.input_rows == 4096 && problem.qk_rows == 4096 &&
             problem.value_z_rows == 8192 && problem.qkv_rows == 8192 && problem.z_rows == 4096 &&
-            problem.padded_k == 4096);
+            problem.padded_k == 4096) ||
+           (problem.input_rows == 2560 && problem.qk_rows == 4096 &&
+            problem.value_z_rows == 8192 && problem.qkv_rows == 8192 && problem.z_rows == 4096 &&
+            problem.padded_k == 2560) ||
+           // Qwen3.5-2B: 16 key/value heads of width 128 over hidden=2048 (q=k=v=2048).
+           (problem.input_rows == 2048 && problem.qk_rows == 4096 &&
+            problem.value_z_rows == 4096 && problem.qkv_rows == 6144 && problem.z_rows == 2048 &&
+            problem.padded_k == 2048);
 }
 
 } // namespace
@@ -90,6 +97,13 @@ Q4Q5GdnInputConvPlan q4_q5_gdn_input_conv_resolve_plan(const Q4Q5GdnInputProblem
     if (!q4_q5_gdn_input_admits(problem) || batch_size <= 0 || batch_size > 8) {
         throw std::invalid_argument(
             "Q4/Q5 GDN input conv: exact problem or column count is not admitted");
+    }
+    if (problem.input_rows == 2560 || problem.input_rows == 2048) {
+        // Qwen3.5-4B's K=2560 and Qwen3.5-2B's K=2048 own no projection-epilogue kernel: GEMV and
+        // split4 fix their reduction shapes statically and 2560 is not a whole number of 1024-value
+        // slabs. The materialized route (independent projection plane, then the registered projected
+        // convolution) covers every admitted width for these geometries.
+        return {Q4Q5GdnInputConvScheduleId::Materialized};
     }
     if (batch_size > 1) { return {Q4Q5GdnInputConvScheduleId::Materialized}; }
     switch (problem.cols) {

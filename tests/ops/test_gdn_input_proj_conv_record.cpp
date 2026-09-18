@@ -243,26 +243,23 @@ std::vector<std::int32_t> ragged(std::int32_t width, std::int32_t batch) {
     return valid;
 }
 
-int run_q4_q5() {
-    constexpr std::int32_t kHidden    = 5120;
-    constexpr std::int32_t kValueRows = 6144;
-    constexpr std::int32_t kZRows     = 6144;
-    DevicePackedWeight qk(
-        quantized_weight::make_patterned_weight(QType::Q4G64_F16S, 4096, kHidden, 1401U));
-    DevicePackedWeight value_z(
-        quantized_weight::make_patterned_weight(QType::Q5G64_F16S, 12288, kHidden, 1403U));
+int run_q4_q5_cases(DevicePackedWeight& qk, DevicePackedWeight& value_z, std::int32_t hidden,
+                    std::int32_t value_rows, std::uint32_t seed_base, bool sweep_all) {
+    const std::int32_t kZRows = value_rows;
 
     int failures   = 0;
     const auto run = [&](std::int32_t width, std::int32_t batch, std::vector<std::int32_t> valid,
                          std::uint32_t seed) {
         const std::size_t snapshot_bytes =
             ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-                kQueryRows, kKeyRows, kValueRows, batch, width, width);
+                hidden, kQueryRows, kKeyRows, value_rows, batch, width, width);
         const std::size_t record_bytes = ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-            kQueryRows, kKeyRows, kValueRows, batch, width, width);
+            hidden, kQueryRows, kKeyRows, value_rows, batch, width, width);
         return run_case(
-            "Q4/Q5 B=" + std::to_string(batch) + " T=" + std::to_string(width), kHidden, kValueRows,
-            kZRows, width, batch, std::move(valid), snapshot_bytes, record_bytes,
+            "K=" + std::to_string(hidden) + " B=" + std::to_string(batch) +
+                " T=" + std::to_string(width),
+            hidden, value_rows, kZRows, width, batch, std::move(valid), snapshot_bytes,
+            record_bytes,
             [&](const Tensor& x, const Tensor& conv, Tensor& state, const Tensor& valid_columns,
                 const Tensor& initial, const Tensor& snapshot_base, Tensor& q, Tensor& k, Tensor& v,
                 Tensor& z, WorkspaceArena& workspace, cudaStream_t stream) {
@@ -279,14 +276,48 @@ int run_q4_q5() {
             },
             seed);
     };
-    for (int width = 2; width <= 16; ++width) {
-        failures += run(width, 1, {}, 1400U + width);
-        failures += run(width, 8, ragged(width, 8), 1450U + width);
+    if (sweep_all) {
+        for (int width = 2; width <= 16; ++width) {
+            failures += run(width, 1, {}, seed_base + static_cast<std::uint32_t>(width));
+            failures += run(width, 8, ragged(width, 8),
+                            seed_base + 50U + static_cast<std::uint32_t>(width));
+        }
+        failures += run(5, 3, {5, 3, 1}, seed_base + 91U);
+        failures += run(4, 4, {4, 3, 2, 1}, seed_base + 92U);
+        return failures;
     }
-    failures += run(5, 3, {5, 3, 1}, 1491U);
-    failures += run(4, 4, {4, 3, 2, 1}, 1492U);
+    failures += run(2, 1, {}, seed_base + 2U);
+    failures += run(4, 1, {}, seed_base + 4U);
+    failures += run(7, 1, {}, seed_base + 7U);
+    failures += run(16, 1, {}, seed_base + 16U);
+    failures += run(16, 8, ragged(16, 8), seed_base + 116U);
+    failures += run(4, 4, {4, 3, 2, 1}, seed_base + 92U);
+    return failures;
+}
+
+int run_q4_q5() {
+    constexpr std::int32_t kHidden    = 5120;
+    constexpr std::int32_t kValueRows = 6144;
+    DevicePackedWeight qk(
+        quantized_weight::make_patterned_weight(QType::Q4G64_F16S, 4096, kHidden, 1401U));
+    DevicePackedWeight value_z(
+        quantized_weight::make_patterned_weight(QType::Q5G64_F16S, 12288, kHidden, 1403U));
+    int failures = run_q4_q5_cases(qk, value_z, kHidden, kValueRows, 1400U, true);
     failures += qk.verify_preserved("Q4 record qk weight");
     failures += value_z.verify_preserved("Q5 record value/z weight");
+    return failures;
+}
+
+int run_q4_q5_4b() {
+    constexpr std::int32_t kHidden    = 2560;
+    constexpr std::int32_t kValueRows = 4096;
+    DevicePackedWeight qk(
+        quantized_weight::make_patterned_weight(QType::Q4G64_F16S, 4096, kHidden, 1911U));
+    DevicePackedWeight value_z(
+        quantized_weight::make_patterned_weight(QType::Q5G64_F16S, 8192, kHidden, 1913U));
+    int failures = run_q4_q5_cases(qk, value_z, kHidden, kValueRows, 1900U, false);
+    failures += qk.verify_preserved("Q4 record K=2560 qk weight");
+    failures += value_z.verify_preserved("Q5 record K=2560 value/z weight");
     return failures;
 }
 
@@ -302,9 +333,9 @@ int run_w8() {
                          std::uint32_t seed) {
         const std::size_t snapshot_bytes =
             ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-                kQueryRows, kKeyRows, kValueRows, batch, width, width);
+                kHidden, kQueryRows, kKeyRows, kValueRows, batch, width, width);
         const std::size_t record_bytes = ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-            kQueryRows, kKeyRows, kValueRows, batch, width, width);
+            kHidden, kQueryRows, kKeyRows, kValueRows, batch, width, width);
         return run_case(
             "W8 B=" + std::to_string(batch) + " T=" + std::to_string(width), kHidden, kValueRows,
             kZRows, width, batch, std::move(valid), snapshot_bytes, record_bytes,
@@ -432,6 +463,7 @@ int main() {
 
     int failures = 0;
     failures += run_q4_q5();
+    failures += run_q4_q5_4b();
     failures += run_w8();
     failures += run_nvfp4();
     failures += run_fp8();

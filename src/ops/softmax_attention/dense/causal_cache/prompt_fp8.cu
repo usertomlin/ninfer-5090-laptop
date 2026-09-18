@@ -46,6 +46,11 @@ void causal_attention_prompt_fp8_attention_dispatch(const Tensor& q, const Tenso
             q, positions, scale, cache, metadata, out, stream);
         return;
     }
+    if (q.ne[1] == CausalD256H8Kv2::QHeads) {
+        causal_attention_prompt_fp8_attention_launch_for<CausalD256H8Kv2>(
+            q, positions, scale, cache, metadata, out, stream);
+        return;
+    }
     if (cache.num_kv_heads == CausalD256H16Kv4::KVHeads) {
         causal_attention_prompt_fp8_attention_launch_for<CausalD256H16Kv4>(
             q, positions, scale, cache, metadata, out, stream);

@@ -597,11 +597,11 @@ int run_record_fold_rounds() {
     Tensor beta(device_beta.p, DType::FP32, {kProfile.value_heads, kWidth, 1});
 
     const std::size_t snapshot_workspace_bytes =
-        ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(2048, 2048, kValueRows, 1,
-                                                                   kWidth, kWidth);
+        ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(kHidden, 2048, 2048, kValueRows,
+                                                                   1, kWidth, kWidth);
     const std::size_t record_workspace_bytes =
-        ops::gdn_input_proj_conv_record_workspace_capacity_bytes(2048, 2048, kValueRows, 1, kWidth,
-                                                                 kWidth);
+        ops::gdn_input_proj_conv_record_workspace_capacity_bytes(kHidden, 2048, 2048, kValueRows, 1,
+                                                                 kWidth, kWidth);
     WorkspaceArena snapshot_workspace(std::max<std::size_t>(256, snapshot_workspace_bytes));
     WorkspaceArena record_workspace(std::max<std::size_t>(256, record_workspace_bytes));
 

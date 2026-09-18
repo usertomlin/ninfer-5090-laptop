@@ -15,6 +15,10 @@ int w8_a16_conformance() {
     constexpr std::array<std::int32_t, 3> kK5120RouteInteriors{24, 512, 1024};
     failures += ninfer::test::linear_pair::run_w8_a16_shape(
         "W8_A16 LinearPair", ShapeCase{5120, 431U, kK5120RouteStarts, kK5120RouteInteriors});
+    // 4B MTP merges its key/value projections through the shared 1024-row W8 pair at k=2560,
+    // which reuses the kK5120 route table.
+    failures += ninfer::test::linear_pair::run_w8_a16_shape(
+        "W8_A16 LinearPair", ShapeCase{2560, 435U, kK5120RouteStarts, kK5120RouteInteriors});
 
     constexpr std::array<std::int32_t, 36> kK2048RouteStarts{
         2,    33,   49,   65,   81,   89,   97,   105,  113,  129,  161,  193,

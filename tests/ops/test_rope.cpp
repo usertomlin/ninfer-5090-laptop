@@ -87,8 +87,12 @@ std::vector<double> rope_oracle(const std::vector<float>& input, const std::vect
                 int axis        = 0;
                 double exponent = 0.0;
                 if (geometry.axes == 2) {
-                    axis     = pair / 18;
-                    exponent = -2.0 * static_cast<double>(pair % 18) / 36.0;
+                    // Vision spreads one rotary plane per spatial axis, so each axis owns
+                    // rotary_dim / 4 pairs and a pair resolves against the half width.
+                    const int pairs_per_axis = geometry.rotary_dim / 4;
+                    axis     = pair / pairs_per_axis;
+                    exponent = -2.0 * static_cast<double>(pair % pairs_per_axis) /
+                               static_cast<double>(geometry.rotary_dim / 2);
                 } else {
                     axis     = geometry.axes == 3 ? pair % 3 : 0;
                     exponent = -2.0 * static_cast<double>(pair) / geometry.rotary_dim;
@@ -361,27 +365,29 @@ int run_single_case(const Geometry& geometry, int heads, int first_position, int
     return failures;
 }
 
-int run_vision_packed_case() {
-    constexpr int kHeadDim = 72;
-    constexpr int kHeads   = 16;
-    constexpr int kTokens  = 11;
-    constexpr int kPlane   = kHeadDim * kHeads;
-    constexpr int kStride  = 3 * kPlane;
-    constexpr Geometry geometry{"vision packed qkv", kHeadDim, kHeadDim, 2, kTokens, kVisionTheta};
+// Both registered vision towers rotate a head that is split over two spatial axes: 72 wide on the
+// 27B tower and 64 wide on the 2B/4B one.
+int run_vision_packed_case(int head_dim) {
+    constexpr int kHeads  = 16;
+    constexpr int kTokens = 11;
+    const int plane       = head_dim * kHeads;
+    const int stride      = 3 * plane;
+    const Geometry geometry{"vision packed qkv", head_dim, head_dim, 2, kTokens, kVisionTheta};
+    const std::string label = "vision packed qkv D=" + std::to_string(head_dim);
 
-    const auto q      = make_bf16_input(dense_elements(kHeadDim, kHeads, kTokens), 0x4001U);
-    const auto k      = make_bf16_input(dense_elements(kHeadDim, kHeads, kTokens), 0x4002U);
-    const auto v      = make_bf16_input(dense_elements(kHeadDim, kHeads, kTokens), 0x4003U);
+    const auto q      = make_bf16_input(dense_elements(head_dim, kHeads, kTokens), 0x4001U);
+    const auto k      = make_bf16_input(dense_elements(head_dim, kHeads, kTokens), 0x4002U);
+    const auto v      = make_bf16_input(dense_elements(head_dim, kHeads, kTokens), 0x4003U);
     const auto q_bits = to_bf16_bits(q);
     const auto k_bits = to_bf16_bits(k);
     const auto v_bits = to_bf16_bits(v);
-    std::vector<std::uint16_t> packed(static_cast<std::size_t>(kStride) * kTokens);
+    std::vector<std::uint16_t> packed(static_cast<std::size_t>(stride) * kTokens);
     for (int token = 0; token < kTokens; ++token) {
-        const std::size_t dense_base  = static_cast<std::size_t>(token) * kPlane;
-        const std::size_t packed_base = static_cast<std::size_t>(token) * kStride;
-        std::copy_n(q_bits.data() + dense_base, kPlane, packed.data() + packed_base);
-        std::copy_n(k_bits.data() + dense_base, kPlane, packed.data() + packed_base + kPlane);
-        std::copy_n(v_bits.data() + dense_base, kPlane, packed.data() + packed_base + 2 * kPlane);
+        const std::size_t dense_base  = static_cast<std::size_t>(token) * plane;
+        const std::size_t packed_base = static_cast<std::size_t>(token) * stride;
+        std::copy_n(q_bits.data() + dense_base, plane, packed.data() + packed_base);
+        std::copy_n(k_bits.data() + dense_base, plane, packed.data() + packed_base + plane);
+        std::copy_n(v_bits.data() + dense_base, plane, packed.data() + packed_base + 2 * plane);
     }
     std::vector<int> positions(2 * kTokens);
     for (int token = 0; token < kTokens; ++token) {
@@ -398,44 +404,42 @@ int run_vision_packed_case() {
 
     auto* packed_data = static_cast<std::uint16_t*>(packed_device.data());
     Tensor position_tensor(position_device.data(), DType::I32, {kTokens, 2});
-    Tensor q_tensor(packed_data, DType::BF16, {kHeadDim, kHeads, kTokens});
-    Tensor k_tensor(packed_data + kPlane, DType::BF16, {kHeadDim, kHeads, kTokens});
-    q_tensor.nb[2] = static_cast<std::int64_t>(kStride) * sizeof(std::uint16_t);
-    k_tensor.nb[2] = static_cast<std::int64_t>(kStride) * sizeof(std::uint16_t);
-    ops::rope(position_tensor, kHeadDim, kVisionTheta, q_tensor, k_tensor, nullptr);
+    Tensor q_tensor(packed_data, DType::BF16, {head_dim, kHeads, kTokens});
+    Tensor k_tensor(packed_data + plane, DType::BF16, {head_dim, kHeads, kTokens});
+    q_tensor.nb[2] = static_cast<std::int64_t>(stride) * sizeof(std::uint16_t);
+    k_tensor.nb[2] = static_cast<std::int64_t>(stride) * sizeof(std::uint16_t);
+    ops::rope(position_tensor, head_dim, kVisionTheta, q_tensor, k_tensor, nullptr);
     cuda_synchronize();
 
     const auto got = from_device<std::uint16_t>(packed_device.data(), packed.size());
-    std::vector<std::uint16_t> q_storage(static_cast<std::size_t>(kStride) * kTokens);
-    std::vector<std::uint16_t> k_storage(static_cast<std::size_t>(kStride) * kTokens);
+    std::vector<std::uint16_t> q_storage(static_cast<std::size_t>(stride) * kTokens);
+    std::vector<std::uint16_t> k_storage(static_cast<std::size_t>(stride) * kTokens);
     for (int token = 0; token < kTokens; ++token) {
-        const std::size_t packed_base = static_cast<std::size_t>(token) * kStride;
-        std::copy_n(got.data() + packed_base, kPlane, q_storage.data() + packed_base);
-        std::copy_n(got.data() + packed_base + kPlane, kPlane, k_storage.data() + packed_base);
+        const std::size_t packed_base = static_cast<std::size_t>(token) * stride;
+        std::copy_n(got.data() + packed_base, plane, q_storage.data() + packed_base);
+        std::copy_n(got.data() + packed_base + plane, plane, k_storage.data() + packed_base);
     }
 
     int failures = 0;
-    failures +=
-        verify_rope_profile("vision packed q", gather_dense(q_storage, kPlane, kStride, kTokens),
-                            q_expected, q, geometry, kHeads);
-    failures +=
-        verify_rope_profile("vision packed k", gather_dense(k_storage, kPlane, kStride, kTokens),
-                            k_expected, k, geometry, kHeads);
+    failures += verify_rope_profile(label + " q", gather_dense(q_storage, plane, stride, kTokens),
+                                    q_expected, q, geometry, kHeads);
+    failures += verify_rope_profile(label + " k", gather_dense(k_storage, plane, stride, kTokens),
+                                    k_expected, k, geometry, kHeads);
     for (int token = 0; token < kTokens; ++token) {
-        const std::size_t dense_base  = static_cast<std::size_t>(token) * kPlane;
-        const std::size_t packed_base = static_cast<std::size_t>(token) * kStride;
+        const std::size_t dense_base  = static_cast<std::size_t>(token) * plane;
+        const std::size_t packed_base = static_cast<std::size_t>(token) * stride;
         if (!std::equal(v_bits.begin() + static_cast<std::ptrdiff_t>(dense_base),
-                        v_bits.begin() + static_cast<std::ptrdiff_t>(dense_base + kPlane),
-                        got.begin() + static_cast<std::ptrdiff_t>(packed_base + 2 * kPlane))) {
-            std::cerr << "vision packed qkv: V plane changed at token=" << token << '\n';
+                        v_bits.begin() + static_cast<std::ptrdiff_t>(dense_base + plane),
+                        got.begin() + static_cast<std::ptrdiff_t>(packed_base + 2 * plane))) {
+            std::cerr << label << ": V plane changed at token=" << token << '\n';
             ++failures;
             break;
         }
     }
-    failures += verify_exact("vision packed positions",
+    failures += verify_exact((label + " positions").c_str(),
                              from_device<int>(position_device.data(), positions.size()), positions);
-    failures += packed_device.verify_guards("vision packed qkv guards");
-    failures += position_device.verify_guards("vision packed position guards");
+    failures += packed_device.verify_guards((label + " guards").c_str());
+    failures += position_device.verify_guards((label + " position guards").c_str());
     return failures;
 }
 
@@ -469,7 +473,8 @@ int main() {
     failures += run_single_case({"27b mtp k mrope", 256, 64, 3, 128, kTextTheta}, 4, 8192);
     failures += run_single_case({"35b mtp k text", 256, 64, 1, 5, kTextTheta}, 2, 16384, 8);
 
-    failures += run_vision_packed_case();
+    // Both registered vision head widths, each split over two spatial axes.
+    for (int head_dim : {72, 64}) { failures += run_vision_packed_case(head_dim); }
 
     // DFlash proposal consumes 2..16 tokens; context append uses the single-K form.
     failures += run_pair_case({"35b dflash proposal", 128, 128, 1, 16, kTextTheta}, 32, 8, 262'128);

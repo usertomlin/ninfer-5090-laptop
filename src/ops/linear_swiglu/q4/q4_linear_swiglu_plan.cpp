@@ -31,8 +31,10 @@ struct RouteSpec {
 
 constexpr Q4LinearSwiGluProblem kShape27{34816, 17408, 5120, 5120, 1};
 constexpr Q4LinearSwiGluProblem kShape9{24576, 12288, 4096, 4096, 1};
+constexpr Q4LinearSwiGluProblem kShape4{18432, 9216, 2560, 2560, 1};
+constexpr Q4LinearSwiGluProblem kShape2{12288, 6144, 2048, 2048, 1};
 
-constexpr std::array<RouteSpec, 10> kRoutes{{
+constexpr std::array<RouteSpec, 10> kRoutesWide{{
     {{1, 1}, Q4LinearSwiGluScheduleId::GemvPair},
     {{2, 32}, Q4LinearSwiGluScheduleId::SmallTTiled},
     {{33, 40}, Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C40},
@@ -45,17 +47,48 @@ constexpr std::array<RouteSpec, 10> kRoutes{{
     {{641, kAnyCols}, Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C128},
 }};
 
-constexpr bool catalog_is_closed() noexcept {
+// The 4B's K=2560 and the 2B's K=2048 reductions own no plain Q4 linear route that could
+// materialize a gate_up projection. Every column count the wide catalog assigns to a materialized
+// gate_up instead runs the geometry-generic folded pair kernel, whose partial-tile path covers
+// those extents.
+constexpr std::array<RouteSpec, 5> kRoutesNarrow{{
+    {{1, 1}, Q4LinearSwiGluScheduleId::GemvPair},
+    {{2, 32}, Q4LinearSwiGluScheduleId::SmallTTiled},
+    {{33, 40}, Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C40},
+    {{41, 48}, Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C48},
+    {{49, kAnyCols}, Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C128},
+}};
+
+template <std::size_t kN>
+constexpr bool catalog_is_closed(const std::array<RouteSpec, kN>& routes) noexcept {
     std::int64_t expected = 1;
-    for (const RouteSpec& route : kRoutes) {
+    for (const RouteSpec& route : routes) {
         if (route.cols.first != expected || route.cols.last < route.cols.first) { return false; }
         expected = static_cast<std::int64_t>(route.cols.last) + 1;
     }
-    return kRoutes.back().cols.last == kAnyCols &&
+    return routes.back().cols.last == kAnyCols &&
            expected == static_cast<std::int64_t>(kAnyCols) + 1;
 }
 
-static_assert(catalog_is_closed(), "Q4 LinearSwiGLU routes must be exact, contiguous, and closed");
+static_assert(catalog_is_closed(kRoutesWide) && catalog_is_closed(kRoutesNarrow),
+              "Q4 LinearSwiGLU routes must be exact, contiguous, and closed");
+
+constexpr bool is_geometry4(const Q4LinearSwiGluProblem& problem) noexcept {
+    return problem.gate_up_rows == kShape4.gate_up_rows &&
+           problem.output_rows == kShape4.output_rows && problem.k == kShape4.k &&
+           problem.padded_k == kShape4.padded_k;
+}
+
+constexpr bool is_geometry2(const Q4LinearSwiGluProblem& problem) noexcept {
+    return problem.gate_up_rows == kShape2.gate_up_rows &&
+           problem.output_rows == kShape2.output_rows && problem.k == kShape2.k &&
+           problem.padded_k == kShape2.padded_k;
+}
+
+// Narrow-K geometries whose reduction has no materializable plain Q4 linear route.
+constexpr bool uses_folded_pairs_only(const Q4LinearSwiGluProblem& problem) noexcept {
+    return is_geometry2(problem) || is_geometry4(problem);
+}
 
 bool supported_shape(const Q4LinearSwiGluProblem& problem) noexcept {
     for (const Q4LinearSwiGluProblem& shape : {kShape27, kShape9}) {
@@ -64,7 +97,7 @@ bool supported_shape(const Q4LinearSwiGluProblem& problem) noexcept {
             return true;
         }
     }
-    return false;
+    return uses_folded_pairs_only(problem);
 }
 
 template <class Allocator>
@@ -108,26 +141,31 @@ Q4LinearSwiGluPlan q4_linear_swiglu_resolve_plan(const Q4LinearSwiGluProblem& pr
             "q4 linear_swiglu: exact problem or column count is not admitted");
     }
 
-    for (const RouteSpec& route : kRoutes) {
-        if (!route.cols.contains(problem.cols)) { continue; }
-        Q4LinearSwiGluPlan plan{
-            route.schedule,
-            0,
-        };
-        switch (route.schedule) {
-        case Q4LinearSwiGluScheduleId::GemvPair:
-        case Q4LinearSwiGluScheduleId::SmallTTiled:
-        case Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C40:
-        case Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C48:
-            return plan;
-        case Q4LinearSwiGluScheduleId::Materialized:
-            plan.workspace_bytes = materialized_workspace_bytes(problem.gate_up_rows, problem.cols);
-            return plan;
-        case Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C128:
-            return plan;
+    const auto resolve_from = [&](const auto& routes) -> Q4LinearSwiGluPlan {
+        for (const RouteSpec& route : routes) {
+            if (!route.cols.contains(problem.cols)) { continue; }
+            Q4LinearSwiGluPlan plan{
+                route.schedule,
+                0,
+            };
+            switch (route.schedule) {
+            case Q4LinearSwiGluScheduleId::GemvPair:
+            case Q4LinearSwiGluScheduleId::SmallTTiled:
+            case Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C40:
+            case Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C48:
+                return plan;
+            case Q4LinearSwiGluScheduleId::Materialized:
+                plan.workspace_bytes =
+                    materialized_workspace_bytes(problem.gate_up_rows, problem.cols);
+                return plan;
+            case Q4LinearSwiGluScheduleId::MmaSplitHalfPairR32C128:
+                return plan;
+            }
         }
-    }
-    throw std::logic_error("q4 linear_swiglu: admitted problem has no covering route");
+        throw std::logic_error("q4 linear_swiglu: admitted problem has no covering route");
+    };
+    return uses_folded_pairs_only(problem) ? resolve_from(kRoutesNarrow)
+                                           : resolve_from(kRoutesWide);
 }
 
 std::size_t q4_linear_swiglu_capacity_workspace_bytes(std::int32_t gate_up_rows,
@@ -140,15 +178,20 @@ std::size_t q4_linear_swiglu_capacity_workspace_bytes(std::int32_t gate_up_rows,
     (void)q4_linear_swiglu_resolve_plan({gate_up_rows, output_rows, k, padded_k, min_cols});
     (void)q4_linear_swiglu_resolve_plan({gate_up_rows, output_rows, k, padded_k, max_cols});
 
-    std::size_t maximum = 0;
-    for (const RouteSpec& route : kRoutes) {
-        if (route.cols.last < min_cols || route.cols.first > max_cols) { continue; }
-        const std::int32_t endpoint = std::min(route.cols.last, max_cols);
-        maximum                     = std::max(maximum, q4_linear_swiglu_resolve_plan(
-                                        {gate_up_rows, output_rows, k, padded_k, endpoint})
-                                                            .workspace_bytes);
-    }
-    return maximum;
+    const auto maximum_over = [&](const auto& routes) {
+        std::size_t maximum = 0;
+        for (const RouteSpec& route : routes) {
+            if (route.cols.last < min_cols || route.cols.first > max_cols) { continue; }
+            const std::int32_t endpoint = std::min(route.cols.last, max_cols);
+            maximum = std::max(maximum, q4_linear_swiglu_resolve_plan(
+                                             {gate_up_rows, output_rows, k, padded_k, endpoint})
+                                             .workspace_bytes);
+        }
+        return maximum;
+    };
+    const Q4LinearSwiGluProblem geometry{gate_up_rows, output_rows, k, padded_k, min_cols};
+    return uses_folded_pairs_only(geometry) ? maximum_over(kRoutesNarrow)
+                                           : maximum_over(kRoutesWide);
 }
 
 void q4_linear_swiglu_execute_plan(const Q4LinearSwiGluPlan& plan, const Tensor& x, const Weight& w,

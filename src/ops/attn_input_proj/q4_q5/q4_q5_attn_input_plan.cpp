@@ -10,7 +10,12 @@ bool supported_shape(const Q4Q5AttnInputProblem& problem) noexcept {
     return (problem.input_rows == 5120 && problem.query_rows == 6144 &&
             problem.kv_rows == 1024 && problem.padded_k == 5120) ||
            (problem.input_rows == 4096 && problem.query_rows == 4096 &&
-            problem.kv_rows == 1024 && problem.padded_k == 4096);
+            problem.kv_rows == 1024 && problem.padded_k == 4096) ||
+           (problem.input_rows == 2560 && problem.query_rows == 4096 &&
+            problem.kv_rows == 1024 && problem.padded_k == 2560) ||
+           // Qwen3.5-2B: 8 query heads and 2 KV heads of width 256 over hidden=2048.
+           (problem.input_rows == 2048 && problem.query_rows == 2048 && problem.kv_rows == 512 &&
+            problem.padded_k == 2048);
 }
 
 } // namespace

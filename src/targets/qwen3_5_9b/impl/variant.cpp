@@ -56,8 +56,8 @@ std::size_t gdn_snapshot_workspace_bytes(const Tensor& hidden,
     if (std::holds_alternative<SplitGdnInputProjectionPayload>(weights.input_projection)) {
         return std::max(kMinimumLeafWorkspaceBytes,
                         ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-                            TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch,
-                            width, width));
+                            TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim,
+                            TextConfig::value_dim, batch, width, width));
     }
     const Weight& parent =
         std::get<FusedGdnInputProjectionPayload>(weights.input_projection).query_key_value_z;
@@ -74,8 +74,8 @@ std::size_t gdn_record_workspace_bytes(const Tensor& hidden,
     if (std::holds_alternative<SplitGdnInputProjectionPayload>(weights.input_projection)) {
         return std::max(kMinimumLeafWorkspaceBytes,
                         ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-                            TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch,
-                            width, width));
+                            TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim,
+                            TextConfig::value_dim, batch, width, width));
     }
     const Weight& parent =
         std::get<FusedGdnInputProjectionPayload>(weights.input_projection).query_key_value_z;
@@ -350,8 +350,8 @@ std::size_t Variant::gdn_input_projection_snapshot_workspace_capacity_bytes(
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
         return ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-            TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch_size, first,
-            last);
+            TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim,
+            batch_size, first, last);
     }
     throw std::logic_error("invalid 9B weights profile");
 }
@@ -363,8 +363,8 @@ std::size_t Variant::gdn_input_projection_record_workspace_capacity_bytes(
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
         return ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-            TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch_size, first,
-            last);
+            TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim,
+            batch_size, first, last);
     }
     throw std::logic_error("invalid 9B weights profile");
 }

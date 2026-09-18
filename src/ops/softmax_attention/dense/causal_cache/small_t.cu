@@ -276,6 +276,9 @@ std::int32_t causal_attention_split_capacity(std::int32_t q_heads, std::int32_t 
     if (q_heads == CausalD256H16Kv4::QHeads && kv_heads == CausalD256H16Kv4::KVHeads) {
         return causal_small_t_launch_capacity<CausalD256H16Kv4>(envelope, tokens, cache_storage);
     }
+    if (q_heads == CausalD256H8Kv2::QHeads && kv_heads == CausalD256H8Kv2::KVHeads) {
+        return causal_small_t_launch_capacity<CausalD256H8Kv2>(envelope, tokens, cache_storage);
+    }
     if (q_heads == CausalD256H16Kv2::QHeads && kv_heads == CausalD256H16Kv2::KVHeads) {
         return causal_small_t_launch_capacity<CausalD256H16Kv2>(envelope, tokens, cache_storage);
     }
@@ -439,6 +442,12 @@ void causal_attention_small_t_launch(
                                                               partial_m, partial_l, out, stream);
         return;
     }
+    if (q.ne[1] == CausalD256H8Kv2::QHeads) {
+        causal_attention_small_t_launch_for<CausalD256H8Kv2>(q, input, pos, scale, cache, invocation,
+                                                             envelope, partial_acc, partial_m,
+                                                             partial_l, out, stream);
+        return;
+    }
     if (cache.num_kv_heads == CausalD256H16Kv4::KVHeads) {
         causal_attention_small_t_launch_for<CausalD256H16Kv4>(q, input, pos, scale, cache,
                                                               invocation, envelope, partial_acc,
@@ -484,6 +493,12 @@ void causal_attention_cached_small_t_launch(const Tensor& q, const Tensor& pos, 
         causal_attention_small_t_launch_for<CausalD256H24Kv4>(q, input, pos, scale, batch_cache,
                                                               invocation, envelope, partial_acc,
                                                               partial_m, partial_l, out, stream);
+        return;
+    }
+    if (q.ne[1] == CausalD256H8Kv2::QHeads) {
+        causal_attention_small_t_launch_for<CausalD256H8Kv2>(q, input, pos, scale, batch_cache,
+                                                             invocation, envelope, partial_acc,
+                                                             partial_m, partial_l, out, stream);
         return;
     }
     if (cache.num_kv_heads == CausalD256H16Kv4::KVHeads) {

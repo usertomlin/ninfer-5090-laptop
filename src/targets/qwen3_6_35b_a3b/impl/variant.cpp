@@ -85,8 +85,8 @@ constexpr std::size_t kMinimumLeafWorkspaceBytes = 1;
 std::size_t gdn_record_workspace_bytes(const Tensor& hidden) {
     return std::max(kMinimumLeafWorkspaceBytes,
                     ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-                        TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim,
-                        hidden.ne[2], hidden.ne[1], hidden.ne[1]));
+                        TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim,
+                        TextConfig::value_dim, hidden.ne[2], hidden.ne[1], hidden.ne[1]));
 }
 
 } // namespace
@@ -280,7 +280,8 @@ std::size_t Variant::gdn_input_projection_snapshot_workspace_capacity_bytes(Weig
                                                                             std::int32_t first,
                                                                             std::int32_t last) {
     return ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-        TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch_size, first, last);
+        TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim,
+        batch_size, first, last);
 }
 
 std::size_t Variant::gdn_input_projection_record_workspace_capacity_bytes(WeightsProfile,
@@ -290,8 +291,8 @@ std::size_t Variant::gdn_input_projection_record_workspace_capacity_bytes(Weight
                                                                           std::int32_t last) {
     return std::max(kMinimumLeafWorkspaceBytes,
                     ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-                        TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch_size,
-                        first, last));
+                        TextConfig::hidden, TextConfig::key_dim, TextConfig::key_dim,
+                        TextConfig::value_dim, batch_size, first, last));
 }
 
 std::size_t Variant::gdn_output_projection_workspace_capacity_bytes(WeightsProfile,
