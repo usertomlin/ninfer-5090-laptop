@@ -214,6 +214,46 @@ The Ornith long-context wave (1,953 prompt tokens and 256 generated tokens per l
 
 ## RTX 5090 laptop verification and benchmarks
 
+This branch also runs on a GeForce RTX 5090 laptop (24 GB). Cooperative-launch residency is resolved from the device's runtime SM count rather than a fixed RTX 5090 value, and cooperative schedules step down to a less-aggressive split when the requested grid cannot be resident. The measurements below were obtained by launching ninfer-serve separately for each model, running tests/measure_serve_generation_speed.py against the local instance, and then shutting the server down — repeated across all models listed.
+
+Qwen3.5-4B (groupwise-int) with FP8 KV, a 4,096-token prefill chunk, a 262,144-token context, MTP3, and greedy sampling:
+
+| Prompt tokens | Prefill tok/s | Decode tok/s | MTP acceptance |
+| --- | --- | --- | --- |
+| 25,600 | 7,667.9 | 223.9 | 61.1% (2.83 tok/round) |
+| 25,600 (warm prefix) | - | 253.6 | 61.1% (2.83 tok/round) |
+| 25,600 (thinking off) | 7,667.7 | 215.8 | 50.0% (2.50 tok/round) |
+
+25,600: prefill 3.339s, decode 0.152s, completion 35 tokens, cached 0, rounds n/a, drafted 36, accepted 22, draft window 3, source HTTP timings
+25,600 (warm prefix): prefill 0.024s, decode 0.134s, completion 35 tokens, cached 25593, rounds n/a, drafted 36, accepted 22, draft window 3, source HTTP timings
+25,600 (thinking off): prefill 3.339s, decode 0.158s, completion 35 tokens, cached 0, rounds n/a, drafted 42, accepted 21, draft window 3, source HTTP timings
+
+
+Qwen3.5-2B (groupwise-int) with FP8 KV, a 4,096-token prefill chunk, a 262,144-token context, MTP3, and greedy sampling:
+
+| Prompt tokens | Prefill tok/s | Decode tok/s | MTP acceptance |
+| --- | --- | --- | --- |
+| 25,600 | 19,291.5 | 814.1 | 100.0% (4.00 tok/round) |
+| 25,600 (warm prefix) | - | 842.9 | 100.0% (4.00 tok/round) |
+| 25,600 (thinking off) | 19,221.9 | 807.5 | 100.0% (4.00 tok/round) |
+
+25,600: prefill 1.327s, decode 0.020s, completion 17 tokens, cached 0, rounds n/a, drafted 12, accepted 12, draft window 3, source HTTP timings
+25,600 (warm prefix): prefill 0.012s, decode 0.019s, completion 17 tokens, cached 25593, rounds n/a, drafted 12, accepted 12, draft window 3, source HTTP timings
+25,600 (thinking off): prefill 1.332s, decode 0.020s, completion 17 tokens, cached 0, rounds n/a, drafted 12, accepted 12, draft window 3, source HTTP timings
+
+
+Qwen3.5-0.8B (groupwise-int) with FP8 KV, a 4,096-token prefill chunk, a 262,144-token context, MTP3, and greedy sampling:
+
+| Prompt tokens | Prefill tok/s | Decode tok/s | MTP acceptance |
+| --- | --- | --- | --- |
+| 25,600 | 37,128.4 | 983.4 | 100.0% (4.00 tok/round) |
+| 25,600 (warm prefix) | - | 987.2 | 100.0% (4.00 tok/round) |
+| 25,600 (thinking off) | 36,788.7 | 978.3 | 100.0% (4.00 tok/round) |
+
+25,600: prefill 0.689s, decode 0.016s, completion 17 tokens, cached 0, rounds n/a, drafted 12, accepted 12, draft window 3, source HTTP timings
+25,600 (warm prefix): prefill 0.011s, decode 0.016s, completion 17 tokens, cached 25593, rounds n/a, drafted 12, accepted 12, draft window 3, source HTTP timings
+25,600 (thinking off): prefill 0.696s, decode 0.016s, completion 17 tokens, cached 0, rounds n/a, drafted 12, accepted 12, draft window 3, source HTTP timings
+
 
 ## Evaluation
 
