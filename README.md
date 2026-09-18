@@ -12,6 +12,9 @@ NInfer supports seven artifact identities. The quick-start commands use Qwen3.8-
 
 | Model | Weights | Artifact | Download and model card |
 |---|---|---|---|
+| Qwen3.5-0.8B | `groupwise-int` | `qwen3_5_0_8b.ninfer` | [Qwen3.5-0.8B](https://huggingface.co/v381654729/qwen3.5-0.8b-ninfer) |
+| Qwen3.5-2B | `groupwise-int` | `qwen3_5_2b.ninfer` | [Qwen3.5-2B](https://huggingface.co/v381654729/qwen3.5-2b-ninfer) |
+| Qwen3.5-4B | `groupwise-int` | `qwen3_5_4b.ninfer` | [Qwen3.5-4B](https://huggingface.co/v381654729/qwen3.5-4b-ninfer) |
 | Qwen3.5-9B | `groupwise-int` | `qwen3_5_9b.ninfer` | [Qwen3.5-9B](https://huggingface.co/ruwwww/qwen3.5-9b-ninfer) |
 | Ornith-1.5-9B | `groupwise-int` | `ornith_1_5_9b.ninfer` | [Ornith-1.5-9B](https://huggingface.co/ruwwww/ornith-1.5-9b-ninfer) |
 | Qwen3.6-27B | `groupwise-int` | `qwen3_6_27b.ninfer` | [Qwen3.6-27B](https://huggingface.co/neroued/Qwen3.6-27B-NInfer) |
@@ -29,6 +32,15 @@ and MTP route under target key `ornith_1_5_9b`; its converter dequantizes the of
 source checkpoint to BF16 before applying the groupwise-int profile and preserves Ornith's
 ThinkingToggle frontend. See the [Qwen3.5-9B artifact reference](docs/maintainer/qwen3.5-9b-artifact.md)
 and [Ornith-1.5-9B artifact reference](docs/maintainer/ornith-1.5-9b-artifact.md).
+
+In addition, the Qwen3.5-4B artifact is a 2,560-wide, 32-layer dense model with 24 linear-attention and eight
+full-attention layers plus one MTP layer. The Qwen3.5-2B and Qwen3.5-0.8B artifacts are 24-layer
+dense models with 18 linear-attention and six full-attention layers each, at 2,048 and 1,024 wide
+respectively, and one MTP layer each. Their converters apply the groupwise-int profile directly to
+the official BF16 checkpoints, tie the full output head and the draft head to the language-model
+embedding matrix, synthesize the missing `generation_config.json`, and use checkpoint-specific
+vision towers instead of the shared Qwen3.6 ones (24 layers at 1,024 wide for 4B and 2B, 12 layers
+at 768 wide for 0.8B).
 
 ## Quick start
 
@@ -168,7 +180,7 @@ linked from each model below.
 
 ## RTX 5060 Ti verification and benchmarks
 
-The branch also runs on a GeForce RTX 5060 Ti (16 GB). Cooperative-launch residency is resolved
+The branch (ruwwww/ninfer-5060ti) also runs on a GeForce RTX 5060 Ti (16 GB). Cooperative-launch residency is resolved
 from the device's runtime SM count rather than a fixed RTX 5090 value, and cooperative schedules
 step down to a less-aggressive split when the requested grid cannot be resident. The measurements
 below are single-run verification on this 40-SM card, separate from the five-seed RTX 5090 results.
@@ -199,6 +211,9 @@ Concurrent committed decode throughput with MTP3:
 
 The Ornith long-context wave (1,953 prompt tokens and 256 generated tokens per lane) measured
 88.4, 107.8, 126.9, and 217.6 aggregate tok/s at concurrency 1, 2, 4, and 8 respectively.
+
+## RTX 5090 laptop verification and benchmarks
+
 
 ## Evaluation
 
